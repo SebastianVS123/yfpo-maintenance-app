@@ -1,233 +1,233 @@
-# 🚀 Step-by-Step Go Live Guide
+# 🚀 Deployment Guide - Firebase Edition (Free, No Limit)
 
-## Prerequisites
-- GitHub account
-- Supabase account (free tier)
-- Vercel account (free tier)
-- Resend account (free tier, 100 emails/day)
-- Domain (optional but recommended for emails)
+## Why Firebase?
 
----
+Supabase free = 2 projects max. Firebase Spark = unlimited projects, generous free tier:
+- Auth 50k MAU free
+- Firestore 50k reads/day free
+- Storage 5GB free
+- Perfect for maintenance team
 
-## STEP 1: Supabase Backend Setup (10 minutes)
+## Step 1: Firebase Project Setup (In Depth - 15 min)
 
-1. Go to https://supabase.com → New Project
-   - Name: maintenance-jobcards
-   - Region: closest to Pretoria (e.g. eu-west or your preference)
-   - Set DB password
+### 1.1 Create Project
+1. https://console.firebase.google.com → Add Project
+2. Name: `maintenance-jobcard`
+3. Analytics: Disable (simpler) or Enable
+4. Wait ~30 sec
 
-2. Wait for project to provision (~2 min)
+### 1.2 Enable Auth
+1. Build → Authentication → Get Started
+2. Sign-in method → Email/Password → Enable → Save
+3. Settings → Authorized domains → Will add Vercel domain later
 
-3. Go to **SQL Editor** → New Query → Paste entire contents of `supabase-schema.sql` from repo root → Run
+### 1.3 Create Firestore
+1. Build → Firestore Database → Create Database
+2. Location: `europe-west3` (closest to Pretoria) or `us-central1`
+3. Start in **Test Mode** (we'll secure later)
+4. Create
 
-   This creates:
-   - Tables: profiles, personnel, job_cards, job_photos, job_assignments, job_commits
-   - Storage bucket: job-photos (public)
-   - RLS policies (permissive for MVP)
-   - Trigger: auto-match personnel on signup
+Collections auto-create, but you can manually create for clarity:
+- `users`
+- `personnel`
+- `jobCards`
+- `jobPhotos`
+- `jobAssignments`
+- `jobCommits`
 
-4. **Auth Settings**:
-   - Authentication → Providers → Email → Enable (should be enabled)
-   - Disable "Confirm email" for easier testing OR keep enabled for production (users get confirmation email)
-   - Authentication → URL Configuration:
-     - Site URL: `http://localhost:3000` for now, later change to Vercel URL
-     - Additional Redirect URLs: add `http://localhost:3000/auth/callback` and later `https://YOUR_APP.vercel.app/auth/callback`
+### 1.4 Enable Storage
+1. Build → Storage → Get Started
+2. Test Mode → Same location as Firestore → Done
 
-5. **Storage Check**:
-   - Storage → Buckets → Should see `job-photos` public
-   - If not, create it manually: New Bucket → Name `job-photos` → Public = true
+### 1.5 Get Client Config
+1. Project Settings (gear icon) → General
+2. Your apps → Web `</>` → Register: `maintenance-web`
+3. Copy config:
+```js
+apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId
+```
+→ These are NEXT_PUBLIC_... env vars
 
-6. **Get API Keys**:
-   - Project Settings → API
-   - Copy:
-     - Project URL: `https://xxxx.supabase.co`
-     - Anon Public Key
-     - Service Role Key (secret, keep safe)
+### 1.6 Get Admin Service Account (for server)
+1. Project Settings → Service Accounts → Generate new private key → Download JSON
+2. JSON contains:
+   - project_id
+   - client_email
+   - private_key
+3. For Vercel env:
+   - FIREBASE_PROJECT_ID = project_id
+   - FIREBASE_CLIENT_EMAIL = client_email
+   - FIREBASE_PRIVATE_KEY = private_key (keep \n, wrap in quotes: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n")
 
----
+### 1.7 Security Rules (After Testing)
 
-## STEP 2: Resend Email Setup (5 minutes)
+**Firestore Rules** (Firestore → Rules):
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /personnel/{id} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
 
-1. Go to https://resend.com → Sign Up
-2. **For Testing (no domain)**:
-   - You can use `onboarding@resend.dev` as FROM email
-   - But it ONLY sends to your own Resend account email
-   - Good for initial test
-3. **For Production (recommended)**:
-   - Domains → Add Domain → e.g. `yourdomain.com`
-   - Add DNS records Resend shows (SPF, DKIM) to your DNS provider
-   - Wait for verification
-   - Then FROM email can be `maintenance@yourdomain.com`
-4. **Get API Key**:
-   - API Keys → Create → Copy `re_...`
+For hardened production (manager only can create personnel):
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.uid == userId;
+    }
+    match /personnel/{id} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['manager', 'admin'];
+    }
+    match /jobCards/{id} { allow read, write: if request.auth != null; }
+    match /jobPhotos/{id} { allow read, write: if request.auth != null; }
+    match /jobAssignments/{id} { allow read, write: if request.auth != null; }
+    match /jobCommits/{id} { allow read, write: if request.auth != null; }
+  }
+}
+```
 
----
+**Storage Rules** (Storage → Rules):
+```javascript
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /job-photos/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}
+```
 
-## STEP 3: Local Test (5 minutes)
+Publish both.
+
+## Step 2: Resend Email (5 min)
+
+1. resend.com → Sign Up
+2. For testing: use `onboarding@resend.dev` (only sends to your own email)
+3. For production: Domains → Add Domain → Add DNS records → Verify → Use `maintenance@yourdomain.com`
+4. API Keys → Create → Copy `re_...`
+
+## Step 3: Local Test (5 min)
 
 ```bash
 cd maintenance-jobcard-app
 npm install
 cp .env.example .env.local
-```
-
-Fill `.env.local`:
-```
-NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=ey...
-SUPABASE_SERVICE_ROLE_KEY=ey...
-RESEND_API_KEY=re_...
-RESEND_FROM_EMAIL=onboarding@resend.dev
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-CRON_SECRET=my-secret-123
-```
-
-```bash
+# Fill env
 npm run dev
 ```
 
-- Open http://localhost:3000 → redirects to /auth/login
-- Go to /auth/signup → Create first account (becomes manager automatically since personnel table empty)
-- Login → Admin Dashboard → Personnel → Add 5 Placeholders → Add real personnel
-- Create Job → Assign to placeholder emails
-- Check console for mocked emails if Resend not configured
-- Test operator signup with same placeholder email
+Open http://localhost:3000 → Signup first user becomes manager → Add personnel → Create job
 
----
+Check Firebase Console → Firestore → Data appears real-time
 
-## STEP 4: Push to GitHub
+Test mobile responsiveness: Chrome DevTools → Toggle device toolbar → iPhone SE, iPad, Desktop
+
+## Step 4: GitHub
 
 ```bash
-git init
 git add .
-git commit -m "Initial: maintenance job card system"
+git commit -m "Firebase edition - mobile responsive"
 git branch -M main
 git remote add origin https://github.com/YOUR_USERNAME/maintenance-jobcard-app.git
 git push -u origin main
 ```
 
-Create repo on GitHub first if not exists.
+## Step 5: Vercel Deploy (5 min)
 
----
+1. vercel.com → New Project → Import GitHub repo
+2. Framework: Next.js
+3. Env Vars:
+```
+NEXT_PUBLIC_FIREBASE_API_KEY
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+NEXT_PUBLIC_FIREBASE_PROJECT_ID
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+NEXT_PUBLIC_FIREBASE_APP_ID
+FIREBASE_PROJECT_ID
+FIREBASE_CLIENT_EMAIL
+FIREBASE_PRIVATE_KEY (with \n, wrap in quotes)
+RESEND_API_KEY
+RESEND_FROM_EMAIL
+NEXT_PUBLIC_APP_URL=https://your-app.vercel.app (update after first deploy)
+CRON_SECRET=random-32-chars
+```
+4. Deploy → Wait
+5. Copy Vercel URL → Update NEXT_PUBLIC_APP_URL env var to that URL → Redeploy
+6. Firebase Console → Auth → Settings → Authorized domains → Add Vercel domain (e.g. `your-app.vercel.app`)
 
-## STEP 5: Deploy to Vercel (5 minutes)
+## Step 6: Overdue Cron
 
-1. Go to https://vercel.com → New Project → Import GitHub repo `maintenance-jobcard-app`
-2. Framework: Next.js (auto-detected)
-3. **Environment Variables** → Add all:
-   ```
-   NEXT_PUBLIC_SUPABASE_URL
-   NEXT_PUBLIC_SUPABASE_ANON_KEY
-   SUPABASE_SERVICE_ROLE_KEY
-   RESEND_API_KEY
-   RESEND_FROM_EMAIL (use verified domain if available)
-   NEXT_PUBLIC_APP_URL = https://YOUR_APP.vercel.app (will be known after first deploy, you can update later)
-   CRON_SECRET = random string e.g. openssl rand -hex 32
-   ```
-4. Deploy → Wait ~2 min
-5. Once deployed, copy Vercel URL (e.g. `https://maintenance-jobcard-app-xxx.vercel.app`)
-6. Go back to Vercel → Settings → Environment Variables → Update `NEXT_PUBLIC_APP_URL` to actual Vercel URL → Redeploy
-
----
-
-## STEP 6: Update Supabase URLs for Production
-
-- Supabase → Authentication → URL Configuration:
-  - Site URL: `https://YOUR_APP.vercel.app`
-  - Additional Redirect URLs:
-    - `https://YOUR_APP.vercel.app/auth/callback`
-    - `https://YOUR_APP.vercel.app/*`
-
----
-
-## STEP 7: Overdue Cron
-
-**Option A: Vercel Cron (Easiest, already configured)**
-
-`vercel.json` in repo:
+**Option A: Vercel Cron (Pro plan needed for hourly, free = daily)**
+`vercel.json` already:
 ```json
 {
-  "crons": [
-    {
-      "path": "/api/check-overdue?secret=YOUR_CRON_SECRET",
-      "schedule": "0 * * * *"
-    }
-  ]
+  "crons": [{
+    "path": "/api/check-overdue?secret=YOUR_SECRET",
+    "schedule": "0 * * * *"
+  }]
 }
 ```
 
-- Vercel automatically runs this every hour
-- Must be on Vercel Pro for cron? Free tier allows daily cron only. If free, change schedule to `0 0 * * *` (daily) or use Option B.
+**Option B: cron-job.org (Free, Recommended)**
+- cron-job.org → Create account → New Cron Job
+- URL: `https://your-app.vercel.app/api/check-overdue?secret=YOUR_SECRET`
+- Schedule: Every 30 minutes
+- Save
 
-**Option B: cron-job.org (Free)**
+Test: `curl https://your-app.vercel.app/api/check-overdue?secret=YOUR_SECRET` → Should return overdueFound
 
-- Go to https://cron-job.org → Create account
-- Create new cron job:
-  - URL: `https://YOUR_APP.vercel.app/api/check-overdue?secret=YOUR_CRON_SECRET`
-  - Schedule: Every 30 minutes
-  - Enable
+## Step 7: Custom Domain (Optional)
 
-**Option C: Manual**
+- Vercel → Settings → Domains → Add domain → Update DNS
+- Update NEXT_PUBLIC_APP_URL to custom domain → Redeploy
+- Firebase Auth → Authorized domains → Add custom domain
 
-Call the endpoint manually or via GitHub Actions.
+## Step 8: First Real Use
 
-Test it:
-```bash
-curl https://YOUR_APP.vercel.app/api/check-overdue?secret=YOUR_CRON_SECRET
-```
-
-Should return JSON with overdueFound.
-
----
-
-## STEP 8: First Real Use
-
-1. Go to `https://YOUR_APP.vercel.app/auth/signup` → Create manager account
-2. Login → Admin → Personnel → Add your real team (name, email, role operator)
-3. Create Job → Assign → They get email with:
-   - Priority badge VERY clearly (colored banner)
-   - Breakdown: What, Where, When, Actions, Departments
-   - Link to job card
-4. Operator clicks link → If first time, redirected to signup? Actually login page has link to signup with `next` param preserved. They signup using SAME email as you added in personnel. System matches automatically (trigger + manual linking).
-5. Operator logs in → Dashboard shows UNOPENED badge → Clicks job → Auto marks as STARTED (admin sees started) → First open time = job start time
-6. Operator adds Estimated Time + Plan of Action → Other assignees see previous commits
-7. Operator uploads completion photo + confirm → Job completed → Email sent to issuer (you)
-
----
-
-## STEP 9: Custom Domain (Optional)
-
-- Vercel → Settings → Domains → Add your domain
-- Update DNS
-- Update `NEXT_PUBLIC_APP_URL` env var to custom domain
-- Update Supabase URL config to custom domain
-
----
+1. https://your-app.vercel.app/auth/signup → Create manager
+2. Login → Admin → Personnel → Add team
+3. Create Job → Assign → They get email (if Resend verified)
+4. Operator clicks link → Signup with same email → Dashboard → Start → Complete → You get email
 
 ## Troubleshooting
 
-- **Emails not sending**: Check Resend logs, verify FROM domain, check that recipient email is allowed if using onboarding@resend.dev
-- **Photos not uploading**: Check Supabase Storage bucket public, RLS policies
-- **Signup says not registered**: Manager must add personnel first in /admin/personnel with exact email
-- **Job not starting on link click**: Check middleware, ensure user is assigned, check job_assignments table
-- **Overdue not triggering**: Check due_date set, or critical jobs >4h heuristic, call API manually to test
+- **Firebase: permission denied**: Check Firestore rules, set to `allow read, write: if true;` temporarily for testing
+- **Auth/invalid-api-key**: Check NEXT_PUBLIC_FIREBASE_API_KEY env var, ensure no quotes
+- **Storage upload fails**: Check Storage rules, bucket name
+- **Admin SDK fails**: Private key must have `\n` literally, code does `replace(/\\n/g, '\n')`, ensure you wrapped in quotes in Vercel
+- **Personnel not matching**: Email lowercased exact match, check Firestore personnel collection
+- **Mobile UI broken**: Clear cache, check Tailwind v4 loaded, viewport meta present
+- **Emails not sending**: Check Resend logs, FROM verified, recipient allowed if using onboarding@resend.dev
 
----
+## Mobile Responsiveness Checklist
 
-## Security Hardening (After MVP)
+We implemented:
+- ✅ Hamburger menu on <768px
+- ✅ Stats grid 3 cols mobile, 5 desktop
+- ✅ Job cards stacked mobile, horizontal desktop
+- ✅ Forms single col mobile, 2 col desktop
+- ✅ 16px inputs to prevent iOS zoom
+- ✅ Camera capture on completion photo
+- ✅ Tables → cards on mobile
+- ✅ Tap targets min 44px
+- ✅ No horizontal scroll
 
-- Tighten RLS policies: only allow managers to create jobs, operators to see assigned only
-- Add role check in API routes
-- Add rate limiting
-- Use Supabase Auth email templates customization
+Test on real phone: Open Vercel URL on phone, test create job, upload photo from camera, complete job.
 
----
-
-## Done!
-
-Your app is live at `https://YOUR_APP.vercel.app`
-
-Manager login: /auth/login
-Operator first time: /auth/signup (must match personnel email)
-
-Enjoy!
+Done! Live at https://your-app.vercel.app — Firebase free, no Supabase limit, mobile + desktop perfect.

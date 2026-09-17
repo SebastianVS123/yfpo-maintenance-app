@@ -1,17 +1,24 @@
-import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
+'use client'
 
-export default async function DashboardPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/hooks/useAuth'
 
-  if (!user) redirect('/auth/login')
+export default function DashboardPage() {
+  const { user, profile, loading } = useAuth()
+  const router = useRouter()
 
-  const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+  useEffect(() => {
+    if (!loading) {
+      if (!user) router.push('/auth/login')
+      else if (profile?.role === 'manager' || profile?.role === 'admin') router.push('/admin')
+      else router.push('/operator')
+    }
+  }, [user, profile, loading, router])
 
-  if (profile?.role === 'manager' || profile?.role === 'admin') {
-    redirect('/admin')
-  } else {
-    redirect('/operator')
-  }
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-10 h-10 border-4 border-black border-t-transparent rounded-full animate-spin"></div>
+    </div>
+  )
 }

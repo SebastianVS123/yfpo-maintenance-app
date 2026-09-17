@@ -6,7 +6,7 @@ interface JobEmailData {
   jobId: string
   title: string
   location: string
-  observedAt: string
+  observedAt: string | Date
   requiredActions: string
   departments: string[]
   priority: string
@@ -14,7 +14,7 @@ interface JobEmailData {
   createdByName: string
   createdByEmail: string
   assignees: { name: string; email: string }[]
-  dueDate?: string
+  dueDate?: string | Date | null
   appUrl: string
 }
 
@@ -34,6 +34,12 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
 
   const jobLink = `${data.appUrl}/jobs/${data.jobId}`
 
+  const formatDate = (d: any) => {
+    if (!d) return 'N/A'
+    const date = d.toDate ? d.toDate() : new Date(d)
+    return date.toLocaleString()
+  }
+
   const html = `
   <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #f9fafb; padding: 20px;">
     <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -49,10 +55,10 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
         
         <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
           <tr><td style="padding: 8px; font-weight: bold; color: #6b7280; width: 140px;">📍 Location:</td><td style="padding: 8px;">${data.location}</td></tr>
-          <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">👁️ Observed:</td><td style="padding: 8px;">${new Date(data.observedAt).toLocaleString()}</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">👁️ Observed:</td><td style="padding: 8px;">${formatDate(data.observedAt)}</td></tr>
           <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">👤 Issued By:</td><td style="padding: 8px;">${data.createdByName} (${data.createdByEmail})</td></tr>
           <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">🏢 Departments:</td><td style="padding: 8px;">${data.departments.join(', ')}</td></tr>
-          ${data.dueDate ? `<tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">⏰ Due Date:</td><td style="padding: 8px; color: #dc2626; font-weight: bold;">${new Date(data.dueDate).toLocaleString()}</td></tr>` : ''}
+          ${data.dueDate ? `<tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">⏰ Due Date:</td><td style="padding: 8px; color: #dc2626; font-weight: bold;">${formatDate(data.dueDate)}</td></tr>` : ''}
         </table>
 
         <div style="background: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
@@ -64,7 +70,7 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
           <a href="${jobLink}" style="display: inline-block; background: #111827; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
             🔗 VIEW & START JOB CARD
           </a>
-          <p style="color: #6b7280; font-size: 12px; margin-top: 12px;">You will be asked to sign in. First time? Create a password using this email: ${data.assignees.map(a => a.email).join(', ')}</p>
+          <p style="color: #6b7280; font-size: 12px; margin-top: 12px;">You will be asked to sign in. First time? Create a password using your assigned email.</p>
         </div>
 
         <div style="border-top: 1px solid #e5e7eb; padding-top: 16px; margin-top: 24px;">
@@ -84,10 +90,7 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
           from: `Maintenance System <${fromEmail}>`,
           to: assignee.email,
           subject: `[${priorityConfig.label}] New Job: ${data.title} - ${data.location}`,
-          html: html.replace(
-            'First time? Create a password using this email:',
-            `First time? Create a password using your email (${assignee.email}):`
-          ),
+          html,
         })
       )
     )
@@ -108,8 +111,8 @@ export async function sendJobCompletionEmail(data: {
   finalNotes?: string
   createdByEmail: string
   appUrl: string
-  startedAt: string
-  completedAt: string
+  startedAt: any
+  completedAt: any
 }) {
   if (!resend) {
     console.log('[EMAIL MOCK] Would send completion email:', data)
@@ -117,6 +120,12 @@ export async function sendJobCompletionEmail(data: {
   }
 
   const jobLink = `${data.appUrl}/jobs/${data.jobId}`
+  const formatDate = (d: any) => {
+    if (!d) return 'N/A'
+    const date = d.toDate ? d.toDate() : new Date(d)
+    return date.toLocaleString()
+  }
+
   const html = `
   <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #f9fafb; padding: 20px;">
     <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -127,8 +136,8 @@ export async function sendJobCompletionEmail(data: {
         <h2 style="color: #111827; margin-top: 0;">${data.title}</h2>
         <p><strong>Location:</strong> ${data.location}</p>
         <p><strong>Completed By:</strong> ${data.completedBy} (${data.completedByEmail})</p>
-        <p><strong>Started:</strong> ${new Date(data.startedAt).toLocaleString()}</p>
-        <p><strong>Completed:</strong> ${new Date(data.completedAt).toLocaleString()}</p>
+        <p><strong>Started:</strong> ${formatDate(data.startedAt)}</p>
+        <p><strong>Completed:</strong> ${formatDate(data.completedAt)}</p>
         ${data.finalNotes ? `<div style="background: #f0fdf4; padding: 16px; border-radius: 8px; margin: 16px 0;"><h3>Completion Notes:</h3><p>${data.finalNotes}</p></div>` : ''}
         <div style="text-align: center; margin: 24px 0;">
           <a href="${jobLink}" style="display: inline-block; background: #111827; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold;">View Job Card</a>
@@ -160,9 +169,9 @@ export async function sendOverdueEmail(data: {
   priority: string
   assignees: { name: string; email: string }[]
   createdByEmail: string
-  dueDate?: string
+  dueDate?: any
   estimatedTime?: string
-  startedAt?: string
+  startedAt?: any
   appUrl: string
 }) {
   if (!resend) {
@@ -171,6 +180,12 @@ export async function sendOverdueEmail(data: {
   }
 
   const jobLink = `${data.appUrl}/jobs/${data.jobId}`
+  const formatDate = (d: any) => {
+    if (!d) return 'N/A'
+    const date = d.toDate ? d.toDate() : new Date(d)
+    return date.toLocaleString()
+  }
+
   const html = `
   <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #f9fafb; padding: 20px;">
     <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: 3px solid #dc2626;">
@@ -182,9 +197,9 @@ export async function sendOverdueEmail(data: {
         <h2 style="color: #dc2626; margin-top: 0;">${data.title}</h2>
         <p><strong>Location:</strong> ${data.location}</p>
         <p><strong>Assigned To:</strong> ${data.assignees.map(a => a.name).join(', ')}</p>
-        ${data.dueDate ? `<p><strong>Due Date:</strong> ${new Date(data.dueDate).toLocaleString()} (PASSED)</p>` : ''}
+        ${data.dueDate ? `<p><strong>Due Date:</strong> ${formatDate(data.dueDate)} (PASSED)</p>` : ''}
         ${data.estimatedTime ? `<p><strong>Estimated Time:</strong> ${data.estimatedTime}</p>` : ''}
-        ${data.startedAt ? `<p><strong>Started:</strong> ${new Date(data.startedAt).toLocaleString()}</p>` : ''}
+        ${data.startedAt ? `<p><strong>Started:</strong> ${formatDate(data.startedAt)}</p>` : ''}
         <div style="text-align: center; margin: 24px 0;">
           <a href="${jobLink}" style="display: inline-block; background: #dc2626; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">⚠️ VIEW OVERDUE JOB NOW</a>
         </div>

@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
+import { db } from '@/lib/firebase/client'
+import { collection, getDocs, addDoc, deleteDoc, doc, updateDoc, query, orderBy } from 'firebase/firestore'
+import { useAuth } from '@/hooks/useAuth'
 
 interface Personnel {
   id: string
@@ -11,7 +13,7 @@ interface Personnel {
   role: string
   department?: string
   is_active: boolean
-  created_at: string
+  created_at: any
 }
 
 export default function PersonnelPage() {
@@ -25,36 +27,37 @@ export default function PersonnelPage() {
     department: ''
   })
   const [submitting, setSubmitting] = useState(false)
+  const { user } = useAuth()
 
   useEffect(() => {
     fetchPersonnel()
   }, [])
 
   const fetchPersonnel = async () => {
-    const supabase = createClient()
-    const { data } = await supabase.from('personnel').select('*').order('created_at', { ascending: false })
-    if (data) setPersonnel(data)
-    setLoading(false)
+    try {
+      const snap = await getDocs(query(collection(db, 'personnel'), orderBy('created_at', 'desc')))
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Personnel))
+      setPersonnel(list)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmitting(true)
-    const supabase = createClient()
-
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      
-      const { error } = await supabase.from('personnel').insert({
+      await addDoc(collection(db, 'personnel'), {
         full_name: form.full_name,
         email: form.email.toLowerCase().trim(),
         role: form.role,
         department: form.department || null,
-        created_by: user?.id,
-        is_active: true
+        created_by: user?.uid,
+        is_active: true,
+        created_at: new Date()
       })
-
-      if (error) throw error
 
       setForm({ full_name: '', email: '', role: 'operator', department: '' })
       setShowForm(false)
@@ -68,19 +71,16 @@ export default function PersonnelPage() {
   }
 
   const toggleActive = async (id: string, current: boolean) => {
-    const supabase = createClient()
-    await supabase.from('personnel').update({ is_active: !current }).eq('id', id)
+    await updateDoc(doc(db, 'personnel', id), { is_active: !current })
     fetchPersonnel()
   }
 
   const deletePersonnel = async (id: string) => {
-    if (!confirm('Delete this personnel? Their job assignments will remain but they cannot log in with new account.')) return
-    const supabase = createClient()
-    await supabase.from('personnel').delete().eq('id', id)
+    if (!confirm('Delete this personnel?')) return
+    await deleteDoc(doc(db, 'personnel', id))
     fetchPersonnel()
   }
 
-  // Placeholder data helper
   const addPlaceholders = async () => {
     const placeholders = [
       { full_name: 'John Maintenance', email: 'john.maint@company.com', role: 'operator', department: 'Production' },
@@ -90,58 +90,64 @@ export default function PersonnelPage() {
       { full_name: 'David Manager', email: 'david.mgr@company.com', role: 'manager', department: 'Management' },
     ]
 
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-
     for (const p of placeholders) {
-      await supabase.from('personnel').upsert({
-        full_name: p.full_name,
-        email: p.email,
-        role: p.role,
-        department: p.department,
-        created_by: user?.id,
-        is_active: true
-      }, { onConflict: 'email' })
+      // Check if exists
+      const existing = personnel.find(per => per.email === p.email)
+      if (!existing) {
+        await addDoc(collection(db, 'personnel'), {
+          full_name: p.full_name,
+          email: p.email,
+          role: p.role,
+          department: p.department,
+          created_by: user?.uid,
+          is_active: true,
+          created_at: new Date()
+        })
+      }
     }
     fetchPersonnel()
   }
 
-  if (loading) return <div className="p-8">Loading...</div>
+  if (loading) return <div className="p-8 text-center">Loading personnel...</div>
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href="/admin" className="text-sm text-gray-600 hover:text-black">← Dashboard</Link>
-            <h1 className="font-bold">Personnel Management</h1>
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href="/admin" className="text-sm text-gray-600 hover:text-black flex items-center gap-1">
+              ← <span className="hidden sm:inline">Dashboard</span>
+            </Link>
+            <h1 className="font-bold text-sm sm:text-base">Personnel</h1>
           </div>
           <div className="flex gap-2">
-            <button onClick={addPlaceholders} className="px-3 py-2 text-xs border rounded-lg hover:bg-gray-50">Add 5 Placeholders</button>
-            <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-black text-white rounded-lg text-sm font-semibold">
-              {showForm ? 'Cancel' : '+ Add Personnel'}
+            <button onClick={addPlaceholders} className="px-2 sm:px-3 py-2 text-[11px] sm:text-xs border rounded-lg hover:bg-gray-50 whitespace-nowrap">
+              +5 Placeholders
+            </button>
+            <button onClick={() => setShowForm(!showForm)} className="px-3 sm:px-4 py-2 bg-black text-white rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap">
+              {showForm ? 'Cancel' : '+ Add'}
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
+      <main className="max-w-6xl mx-auto px-4 py-4 sm:py-8">
         {showForm && (
-          <div className="bg-white rounded-xl border p-6 mb-8">
-            <h3 className="font-semibold mb-4">Add New Personnel / Operator</h3>
-            <p className="text-sm text-gray-600 mb-4">This pre-registers them. When they first click email job link, they can create password with this exact email. Saved and matched automatically.</p>
-            <form onSubmit={handleSubmit} className="grid md:grid-cols-2 gap-4">
+          <div className="bg-white rounded-xl border p-4 sm:p-6 mb-6 sm:mb-8 shadow-sm">
+            <h3 className="font-semibold mb-2">Add New Personnel / Operator</h3>
+            <p className="text-xs sm:text-sm text-gray-600 mb-4">Pre-registers them. When they first click email job link, they can create password with this exact email. Saved and matched automatically via Firebase.</p>
+            <form onSubmit={handleSubmit} className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">Full Name *</label>
-                <input required value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} className="w-full px-3 py-2 border rounded-lg" placeholder="e.g. John Doe" />
+                <input required value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} className="w-full px-3 py-2.5 border rounded-lg text-base" placeholder="e.g. John Doe" />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Email *</label>
-                <input required type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2 border rounded-lg" placeholder="john@company.com" />
+                <input required type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2.5 border rounded-lg text-base" placeholder="john@company.com" />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Role *</label>
-                <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value as any })} className="w-full px-3 py-2 border rounded-lg">
+                <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value as any })} className="w-full px-3 py-2.5 border rounded-lg text-base bg-white">
                   <option value="operator">Operator / Technician</option>
                   <option value="manager">Manager (can create jobs)</option>
                   <option value="admin">Admin</option>
@@ -149,10 +155,10 @@ export default function PersonnelPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Department</label>
-                <input value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} className="w-full px-3 py-2 border rounded-lg" placeholder="e.g. Production" />
+                <input value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} className="w-full px-3 py-2.5 border rounded-lg text-base" placeholder="e.g. Production" />
               </div>
-              <div className="md:col-span-2">
-                <button disabled={submitting} type="submit" className="w-full bg-black text-white py-2.5 rounded-lg font-semibold disabled:opacity-50">
+              <div className="sm:col-span-2">
+                <button disabled={submitting} type="submit" className="w-full bg-black text-white py-3 rounded-lg font-semibold disabled:opacity-50 text-base">
                   {submitting ? 'Adding...' : 'Add Personnel'}
                 </button>
               </div>
@@ -160,12 +166,12 @@ export default function PersonnelPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-xl border overflow-hidden">
+        {/* Desktop Table */}
+        <div className="hidden md:block bg-white rounded-xl border overflow-hidden shadow-sm">
           <div className="p-6 border-b">
             <h2 className="font-semibold">All Personnel ({personnel.length})</h2>
             <p className="text-sm text-gray-500">Manage who can be assigned jobs and their roles/emails</p>
           </div>
-
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
@@ -204,8 +210,38 @@ export default function PersonnelPage() {
           </div>
         </div>
 
-        <div className="mt-8 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
-          <strong>How matching works:</strong> When you add personnel here, we save name + email + role. When that person first signs up via /auth/signup using SAME email, we automatically match them and assign their role. Their existing job assignments (via personnel_id) get linked to their new profile_id. Future emails to them will work.
+        {/* Mobile Cards */}
+        <div className="md:hidden space-y-3">
+          <div className="flex justify-between items-center">
+            <h2 className="font-semibold text-sm">All Personnel ({personnel.length})</h2>
+            <span className="text-xs text-gray-500">Tap for actions</span>
+          </div>
+          {personnel.map(p => (
+            <div key={p.id} className="bg-white rounded-xl border p-4 shadow-sm">
+              <div className="flex justify-between items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm truncate">{p.full_name}</div>
+                  <div className="text-xs text-gray-600 truncate">{p.email}</div>
+                  <div className="flex gap-2 mt-2">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] ${p.role === 'manager' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100'}`}>{p.role}</span>
+                    {p.department && <span className="px-2 py-0.5 rounded-full text-[10px] bg-blue-50 text-blue-700">{p.department}</span>}
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] ${p.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{p.is_active ? 'Active' : 'Inactive'}</span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button onClick={() => toggleActive(p.id, p.is_active)} className="text-[11px] px-2 py-1 border rounded hover:bg-gray-50">{p.is_active ? 'Deactivate' : 'Activate'}</button>
+                  <button onClick={() => deletePersonnel(p.id)} className="text-[11px] px-2 py-1 border border-red-200 text-red-600 rounded hover:bg-red-50">Delete</button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {personnel.length === 0 && (
+            <div className="bg-white rounded-xl border p-8 text-center text-gray-500 text-sm">No personnel yet. Add some or use placeholder button.</div>
+          )}
+        </div>
+
+        <div className="mt-6 sm:mt-8 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+          <strong>How matching works (Firebase):</strong> When you add personnel here, we save to Firestore. When that person first signs up using SAME email, we automatically match them and assign their role. Their job assignments get linked via profile_id. Future emails work instantly. No Supabase limit!
         </div>
       </main>
     </div>

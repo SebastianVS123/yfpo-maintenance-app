@@ -1,9 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useAuth } from '@/hooks/useAuth'
+import { db, storage } from '@/lib/firebase/client'
+import { collection, getDocs, addDoc, doc, setDoc, query, where } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { DEPARTMENTS } from '@/lib/utils'
 
 interface Personnel {
@@ -15,6 +18,7 @@ interface Personnel {
 
 export default function CreateJobPage() {
   const router = useRouter()
+  const { user, profile } = useAuth()
   const [loading, setLoading] = useState(false)
   const [personnelList, setPersonnelList] = useState<Personnel[]>([])
   const [photos, setPhotos] = useState<File[]>([])
@@ -36,16 +40,15 @@ export default function CreateJobPage() {
   }, [])
 
   const fetchPersonnel = async () => {
-    const supabase = createClient()
-    const { data } = await supabase.from('personnel').select('*').eq('is_active', true).order('full_name')
-    if (data) setPersonnelList(data)
+    const snap = await getDocs(collection(db, 'personnel'))
+    const list = snap.docs.filter(d => d.data().is_active !== false).map(d => ({ id: d.id, ...d.data() } as Personnel))
+    setPersonnelList(list)
   }
 
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const files = Array.from(e.target.files)
       setPhotos(prev => [...prev, ...files])
-      
       const newPreviews = files.map(file => URL.createObjectURL(file))
       setPhotoPreviews(prev => [...prev, ...newPreviews])
     }
@@ -89,68 +92,65 @@ export default function CreateJobPage() {
     }
 
     setLoading(true)
-    const supabase = createClient()
 
     try {
-      const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Not authenticated')
 
       // Create job card
-      const { data: job, error: jobError } = await supabase
-        .from('job_cards')
-        .insert({
-          title: form.title,
-          location: form.location,
-          observed_at: new Date(form.observed_at).toISOString(),
-          required_actions: form.required_actions,
-          departments: form.departments,
-          priority: form.priority,
-          due_date: form.due_date ? new Date(form.due_date).toISOString() : null,
-          created_by: user.id,
-          status: 'open'
-        })
-        .select()
-        .single()
+      const jobData = {
+        title: form.title,
+        location: form.location,
+        observed_at: new Date(form.observed_at),
+        required_actions: form.required_actions,
+        departments: form.departments,
+        priority: form.priority,
+        due_date: form.due_date ? new Date(form.due_date) : null,
+        created_by: user.uid,
+        createdByName: profile?.full_name || user.email,
+        createdByEmail: profile?.email || user.email,
+        status: 'open',
+        estimated_time: null,
+        started_at: null,
+        completed_at: null,
+        completion_notes: null,
+        created_at: new Date(),
+        updated_at: new Date()
+      }
 
-      if (jobError) throw jobError
+      const jobRef = await addDoc(collection(db, 'jobCards'), jobData)
+      const jobId = jobRef.id
 
-      // Upload photos
+      // Upload photos to Firebase Storage
       const photoUrls: string[] = []
       for (const photo of photos) {
-        const fileName = `${job.id}/${Date.now()}-${photo.name}`
-        const { error: uploadError } = await supabase.storage
-          .from('job-photos')
-          .upload(fileName, photo)
-
-        if (uploadError) {
-          console.error('Upload error:', uploadError)
-          continue
-        }
-
-        const { data: { publicUrl } } = supabase.storage.from('job-photos').getPublicUrl(fileName)
+        const fileName = `job-photos/${jobId}/${Date.now()}-${photo.name}`
+        const storageRef = ref(storage, fileName)
+        await uploadBytes(storageRef, photo)
+        const publicUrl = await getDownloadURL(storageRef)
         photoUrls.push(publicUrl)
 
-        await supabase.from('job_photos').insert({
-          job_id: job.id,
+        await addDoc(collection(db, 'jobPhotos'), {
+          job_id: jobId,
           url: publicUrl,
           type: 'issue',
           file_name: photo.name,
-          uploaded_by: user.id
+          uploaded_by: user.uid,
+          created_at: new Date()
         })
       }
 
       // Create assignments
       for (const personnelId of form.assignedPersonnel) {
-        await supabase.from('job_assignments').insert({
-          job_id: job.id,
+        await addDoc(collection(db, 'jobAssignments'), {
+          job_id: jobId,
           personnel_id: personnelId,
-          status: 'unopened'
+          profile_id: null,
+          status: 'unopened',
+          opened_at: null,
+          created_at: new Date()
         })
       }
 
-      // Get creator profile
-      const { data: creatorProfile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-      
       // Get assignee details for email
       const assignees = personnelList.filter(p => form.assignedPersonnel.includes(p.id))
 
@@ -161,18 +161,18 @@ export default function CreateJobPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             type: 'assignment',
-            jobId: job.id,
-            title: job.title,
-            location: job.location,
-            observedAt: job.observed_at,
-            requiredActions: job.required_actions,
-            departments: job.departments,
-            priority: job.priority,
+            jobId,
+            title: jobData.title,
+            location: jobData.location,
+            observedAt: jobData.observed_at,
+            requiredActions: jobData.required_actions,
+            departments: jobData.departments,
+            priority: jobData.priority,
             photos: photoUrls,
-            createdByName: creatorProfile?.full_name || 'Manager',
-            createdByEmail: creatorProfile?.email || user.email,
+            createdByName: jobData.createdByName,
+            createdByEmail: jobData.createdByEmail,
             assignees: assignees.map(a => ({ name: a.full_name, email: a.email })),
-            dueDate: job.due_date,
+            dueDate: jobData.due_date,
             appUrl: window.location.origin
           })
         })
@@ -180,7 +180,7 @@ export default function CreateJobPage() {
         console.error('Email failed but job created:', emailError)
       }
 
-      router.push(`/jobs/${job.id}?created=true`)
+      router.push(`/jobs/${jobId}?created=true`)
     } catch (error: any) {
       console.error(error)
       alert('Error creating job: ' + error.message)
@@ -191,20 +191,23 @@ export default function CreateJobPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/admin" className="text-sm text-gray-600 hover:text-black">← Back to Dashboard</Link>
-          <div className="text-sm font-medium">Create Maintenance Job</div>
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+          <Link href="/admin" className="text-sm text-gray-600 hover:text-black flex items-center gap-1">
+            <span>←</span> <span className="hidden sm:inline">Back to Dashboard</span><span className="sm:hidden">Back</span>
+          </Link>
+          <div className="text-sm font-medium">Create Job</div>
+          <div className="w-12"></div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-xl border shadow-sm p-6 md:p-8">
-          <h1 className="text-2xl font-bold mb-2">Raise New Maintenance Issue</h1>
-          <p className="text-gray-600 text-sm mb-8">Fill in details. Photos and assignment are required.</p>
+      <main className="max-w-4xl mx-auto px-4 py-4 sm:py-8">
+        <div className="bg-white rounded-xl border shadow-sm p-4 sm:p-6 md:p-8">
+          <h1 className="text-xl sm:text-2xl font-bold mb-2">Raise New Maintenance Issue</h1>
+          <p className="text-gray-600 text-sm mb-6 sm:mb-8">Fill in details. Photos and assignment are required. Works on mobile & desktop.</p>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid md:grid-cols-2 gap-6">
+          <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
+            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium mb-2">What is the issue? *</label>
                 <input
@@ -213,7 +216,7 @@ export default function CreateJobPage() {
                   value={form.title}
                   onChange={e => setForm({ ...form, title: e.target.value })}
                   placeholder="e.g. Hydraulic leak on Line 3 press"
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-base"
                 />
               </div>
 
@@ -224,8 +227,8 @@ export default function CreateJobPage() {
                   type="text"
                   value={form.location}
                   onChange={e => setForm({ ...form, location: e.target.value })}
-                  placeholder="e.g. Plant B, Assembly Line 3"
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  placeholder="e.g. Plant B, Line 3"
+                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-base"
                 />
               </div>
 
@@ -236,7 +239,7 @@ export default function CreateJobPage() {
                   type="datetime-local"
                   value={form.observed_at}
                   onChange={e => setForm({ ...form, observed_at: e.target.value })}
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-base"
                 />
               </div>
 
@@ -248,7 +251,7 @@ export default function CreateJobPage() {
                   value={form.required_actions}
                   onChange={e => setForm({ ...form, required_actions: e.target.value })}
                   placeholder="Describe what needs to be done, safety precautions, tools needed..."
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-base"
                 />
               </div>
 
@@ -257,7 +260,7 @@ export default function CreateJobPage() {
                 <select
                   value={form.priority}
                   onChange={e => setForm({ ...form, priority: e.target.value as any })}
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-base bg-white"
                 >
                   <option value="low">Low - Can wait</option>
                   <option value="medium">Medium - Normal</option>
@@ -267,20 +270,20 @@ export default function CreateJobPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Due Date (Optional but for Overdue)</label>
+                <label className="block text-sm font-medium mb-2">Due Date (for Overdue)</label>
                 <input
                   type="datetime-local"
                   value={form.due_date}
                   onChange={e => setForm({ ...form, due_date: e.target.value })}
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-base"
                 />
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium mb-2">Affected Departments * (multi-select)</label>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                <label className="block text-sm font-medium mb-2">Affected Departments * (tap to select)</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {DEPARTMENTS.map(dept => (
-                    <label key={dept} className={`p-3 border rounded-lg cursor-pointer flex items-center gap-2 ${form.departments.includes(dept) ? 'bg-black text-white border-black' : 'bg-white hover:bg-gray-50'}`}>
+                    <label key={dept} className={`p-3 border rounded-lg cursor-pointer flex items-center justify-center gap-2 transition text-center ${form.departments.includes(dept) ? 'bg-black text-white border-black' : 'bg-white hover:bg-gray-50'}`}>
                       <input
                         type="checkbox"
                         checked={form.departments.includes(dept)}
@@ -294,8 +297,8 @@ export default function CreateJobPage() {
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium mb-2">Upload Photos * (issue evidence)</label>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                <label className="block text-sm font-medium mb-2">Upload Photos *</label>
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 sm:p-8 text-center hover:border-gray-400 transition">
                   <input
                     type="file"
                     multiple
@@ -304,22 +307,22 @@ export default function CreateJobPage() {
                     className="hidden"
                     id="photo-upload"
                   />
-                  <label htmlFor="photo-upload" className="cursor-pointer">
+                  <label htmlFor="photo-upload" className="cursor-pointer block">
                     <div className="text-3xl mb-2">📷</div>
-                    <div className="text-sm font-medium">Click to upload photos</div>
-                    <div className="text-xs text-gray-500">PNG, JPG up to 10MB each</div>
+                    <div className="text-sm font-medium">Tap to upload photos</div>
+                    <div className="text-xs text-gray-500 mt-1">PNG, JPG up to 10MB each - works on mobile camera</div>
                   </label>
                 </div>
                 
                 {photoPreviews.length > 0 && (
-                  <div className="grid grid-cols-3 md:grid-cols-4 gap-3 mt-4">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mt-4">
                     {photoPreviews.map((preview, idx) => (
                       <div key={idx} className="relative group">
-                        <img src={preview} alt={`Preview ${idx}`} className="w-full h-24 object-cover rounded-lg border" />
+                        <img src={preview} alt={`Preview ${idx}`} className="w-full h-20 sm:h-24 object-cover rounded-lg border" />
                         <button
                           type="button"
                           onClick={() => removePhoto(idx)}
-                          className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 text-white rounded-full text-xs flex items-center justify-center"
+                          className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 text-white rounded-full text-xs flex items-center justify-center shadow"
                         >
                           ✕
                         </button>
@@ -330,24 +333,24 @@ export default function CreateJobPage() {
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium mb-2">Allocate to Personnel * (multi-select)</label>
+                <label className="block text-sm font-medium mb-2">Allocate to Personnel *</label>
                 {personnelList.length === 0 ? (
                   <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
                     No personnel found. <Link href="/admin/personnel" className="underline font-semibold">Add personnel first</Link>
                   </div>
                 ) : (
-                  <div className="border rounded-lg max-h-60 overflow-y-auto divide-y">
+                  <div className="border rounded-lg max-h-60 overflow-y-auto divide-y bg-white">
                     {personnelList.map(person => (
                       <label key={person.id} className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 ${form.assignedPersonnel.includes(person.id) ? 'bg-blue-50' : ''}`}>
                         <input
                           type="checkbox"
                           checked={form.assignedPersonnel.includes(person.id)}
                           onChange={() => togglePersonnel(person.id)}
-                          className="w-4 h-4"
+                          className="w-5 h-5 flex-shrink-0"
                         />
-                        <div className="flex-1">
-                          <div className="font-medium text-sm">{person.full_name}</div>
-                          <div className="text-xs text-gray-500">{person.email} • {person.role}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm truncate">{person.full_name}</div>
+                          <div className="text-xs text-gray-500 truncate">{person.email} • {person.role}</div>
                         </div>
                       </label>
                     ))}
@@ -357,14 +360,14 @@ export default function CreateJobPage() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-6 border-t">
-              <Link href="/admin" className="px-6 py-3 border rounded-lg text-sm font-medium hover:bg-gray-50">
+            <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t">
+              <Link href="/admin" className="px-6 py-3 border rounded-lg text-sm font-medium hover:bg-gray-50 text-center order-2 sm:order-1">
                 Cancel
               </Link>
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-1 bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 disabled:opacity-50"
+                className="flex-1 bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 disabled:opacity-50 text-base order-1 sm:order-2"
               >
                 {loading ? 'Lodging Job...' : '✅ Confirm & Lodge Job Card'}
               </button>

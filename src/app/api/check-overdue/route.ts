@@ -1,112 +1,86 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { adminDb } from '@/lib/firebase/admin'
 import { sendOverdueEmail } from '@/lib/email'
 
-function createServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
-}
-
-// This endpoint should be called by a cron job (e.g. Vercel Cron or Supabase pg_cron)
-// It checks for overdue jobs and sends emails
-
 export async function GET(request: NextRequest) {
-  // Optional simple auth via query param or header
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET || 'dev-secret'
 
-  // Allow if no secret set in dev, or if matches
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${cronSecret}`) {
-    // Also check query param for ease
     const { searchParams } = new URL(request.url)
     if (searchParams.get('secret') !== cronSecret) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
   }
 
-  const supabase = createServiceClient()
+  if (!adminDb) {
+    return NextResponse.json({ error: 'Firebase Admin not configured' }, { status: 500 })
+  }
 
   try {
-    // Find jobs that are overdue:
-    // 1. Have due_date in past and not completed
-    // 2. Or started_at + estimated_time parsing? For simplicity, we check due_date only in cron,
-    //    but also check jobs started > 24h ago with high/critical priority as overdue heuristic
-    const now = new Date().toISOString()
+    const now = new Date()
+    const nowIso = now.toISOString()
 
-    const { data: overdueByDueDate, error } = await supabase
-      .from('job_cards')
-      .select(`
-        *,
-        job_assignments(
-          personnel(email, full_name)
-        ),
-        profiles!job_cards_created_by_fkey(email, full_name)
-      `)
-      .neq('status', 'completed')
-      .neq('status', 'overdue')
-      .lt('due_date', now)
+    // Query jobs not completed and not already overdue
+    const jobsRef = adminDb.collection('jobCards')
+    const snapshot = await jobsRef.where('status', '!=', 'completed').get()
 
-    if (error) throw error
+    const overdueJobs: any[] = []
 
-    // Also check jobs that started more than X time ago without completion
-    // For demo: critical jobs > 4 hours, high > 12 hours, medium > 48 hours, low > 7 days
-    const { data: oldStartedJobs } = await supabase
-      .from('job_cards')
-      .select(`
-        *,
-        job_assignments(
-          personnel(email, full_name)
-        ),
-        profiles!job_cards_created_by_fkey(email, full_name)
-      `)
-      .neq('status', 'completed')
-      .neq('status', 'overdue')
-      .not('started_at', 'is', null)
+    for (const doc of snapshot.docs) {
+      const data = doc.data()
+      if (data.status === 'overdue') continue
 
-    const overdueHeuristic: any[] = []
-    const nowTime = new Date().getTime()
+      let isOverdue = false
 
-    for (const job of oldStartedJobs || []) {
-      if (!job.started_at) continue
-      const started = new Date(job.started_at).getTime()
-      const hoursSinceStart = (nowTime - started) / (1000 * 60 * 60)
+      // Check due_date
+      if (data.due_date) {
+        const dueDate = data.due_date.toDate ? data.due_date.toDate() : new Date(data.due_date)
+        if (dueDate < now) isOverdue = true
+      }
 
-      let threshold = 48 // default medium
-      if (job.priority === 'critical') threshold = 4
-      else if (job.priority === 'high') threshold = 12
-      else if (job.priority === 'low') threshold = 168 // 7 days
+      // Check heuristic based on started_at
+      if (!isOverdue && data.started_at) {
+        const started = data.started_at.toDate ? data.started_at.toDate() : new Date(data.started_at)
+        const hoursSinceStart = (now.getTime() - started.getTime()) / (1000 * 60 * 60)
+        let threshold = 48
+        if (data.priority === 'critical') threshold = 4
+        else if (data.priority === 'high') threshold = 12
+        else if (data.priority === 'low') threshold = 168
+        if (hoursSinceStart > threshold) isOverdue = true
+      }
 
-      if (hoursSinceStart > threshold) {
-        overdueHeuristic.push(job)
+      if (isOverdue) {
+        overdueJobs.push({ id: doc.id, ...data })
       }
     }
 
-    const allOverdue = [...(overdueByDueDate || []), ...overdueHeuristic]
-    // Deduplicate by id
-    const uniqueOverdue = Array.from(new Map(allOverdue.map(j => [j.id, j])).values())
-
     const results = []
 
-    for (const job of uniqueOverdue) {
-      // Mark as overdue
-      await supabase.from('job_cards').update({ status: 'overdue' }).eq('id', job.id)
+    for (const job of overdueJobs) {
+      await adminDb.collection('jobCards').doc(job.id).update({ status: 'overdue', updated_at: new Date() })
 
-      // Prepare assignees
-      const assignees = job.job_assignments?.map((a: any) => ({
-        name: a.personnel?.full_name || 'Operator',
-        email: a.personnel?.email
-      })).filter((a: any) => a.email) || []
+      // Get assignments
+      const assignmentsSnap = await adminDb.collection('jobAssignments').where('job_id', '==', job.id).get()
+      const assignees = []
+      for (const aDoc of assignmentsSnap.docs) {
+        const aData = aDoc.data()
+        if (aData.personnel_id) {
+          const pDoc = await adminDb.collection('personnel').doc(aData.personnel_id).get()
+          if (pDoc.exists) {
+            const pData = pDoc.data()
+            if (pData?.email) assignees.push({ name: pData.full_name, email: pData.email })
+          }
+        }
+      }
 
-      // Send overdue email
       const emailResult = await sendOverdueEmail({
         jobId: job.id,
         title: job.title,
         location: job.location,
         priority: job.priority,
         assignees,
-        createdByEmail: job.profiles?.email,
+        createdByEmail: job.createdByEmail,
         dueDate: job.due_date,
         estimatedTime: job.estimated_time,
         startedAt: job.started_at,
@@ -117,10 +91,8 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      checkedAt: now,
-      overdueFound: uniqueOverdue.length,
-      overdueByDueDate: overdueByDueDate?.length || 0,
-      overdueByHeuristic: overdueHeuristic.length,
+      checkedAt: nowIso,
+      overdueFound: overdueJobs.length,
       results
     })
   } catch (err: any) {
@@ -129,7 +101,6 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// Also allow POST for manual trigger
 export async function POST(request: NextRequest) {
   return GET(request)
 }
