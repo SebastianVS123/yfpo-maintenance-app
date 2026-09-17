@@ -4,9 +4,8 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/hooks/useAuth'
-import { db, storage } from '@/lib/firebase/client'
-import { collection, getDocs, addDoc, doc, setDoc, query, where } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { db } from '@/lib/firebase/client'
+import { collection, getDocs, addDoc } from 'firebase/firestore'
 import { DEPARTMENTS } from '@/lib/utils'
 
 interface Personnel {
@@ -80,6 +79,26 @@ export default function CreateJobPage() {
     }))
   }
 
+  const uploadToCloudinary = async (file: File, jobId: string) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('jobId', jobId)
+    formData.append('type', 'issue')
+
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      body: formData
+    })
+
+    if (!res.ok) {
+      const err = await res.json()
+      throw new Error(err.error || 'Upload failed')
+    }
+
+    const data = await res.json()
+    return data.url
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (form.departments.length === 0) {
@@ -96,7 +115,6 @@ export default function CreateJobPage() {
     try {
       if (!user) throw new Error('Not authenticated')
 
-      // Create job card
       const jobData = {
         title: form.title,
         location: form.location,
@@ -120,23 +138,24 @@ export default function CreateJobPage() {
       const jobRef = await addDoc(collection(db, 'jobCards'), jobData)
       const jobId = jobRef.id
 
-      // Upload photos to Firebase Storage
+      // Upload photos to Cloudinary (no billing needed!)
       const photoUrls: string[] = []
       for (const photo of photos) {
-        const fileName = `job-photos/${jobId}/${Date.now()}-${photo.name}`
-        const storageRef = ref(storage, fileName)
-        await uploadBytes(storageRef, photo)
-        const publicUrl = await getDownloadURL(storageRef)
-        photoUrls.push(publicUrl)
+        try {
+          const publicUrl = await uploadToCloudinary(photo, jobId)
+          photoUrls.push(publicUrl)
 
-        await addDoc(collection(db, 'jobPhotos'), {
-          job_id: jobId,
-          url: publicUrl,
-          type: 'issue',
-          file_name: photo.name,
-          uploaded_by: user.uid,
-          created_at: new Date()
-        })
+          await addDoc(collection(db, 'jobPhotos'), {
+            job_id: jobId,
+            url: publicUrl,
+            type: 'issue',
+            file_name: photo.name,
+            uploaded_by: user.uid,
+            created_at: new Date()
+          })
+        } catch (uploadErr) {
+          console.error('Photo upload failed:', uploadErr)
+        }
       }
 
       // Create assignments
@@ -151,10 +170,8 @@ export default function CreateJobPage() {
         })
       }
 
-      // Get assignee details for email
       const assignees = personnelList.filter(p => form.assignedPersonnel.includes(p.id))
 
-      // Send emails via API
       try {
         await fetch('/api/send-email', {
           method: 'POST',
@@ -196,7 +213,7 @@ export default function CreateJobPage() {
           <Link href="/admin" className="text-sm text-gray-600 hover:text-black flex items-center gap-1">
             <span>←</span> <span className="hidden sm:inline">Back to Dashboard</span><span className="sm:hidden">Back</span>
           </Link>
-          <div className="text-sm font-medium">Create Job</div>
+          <div className="text-sm font-medium">Create Job • Cloudinary</div>
           <div className="w-12"></div>
         </div>
       </header>
@@ -204,7 +221,11 @@ export default function CreateJobPage() {
       <main className="max-w-4xl mx-auto px-4 py-4 sm:py-8">
         <div className="bg-white rounded-xl border shadow-sm p-4 sm:p-6 md:p-8">
           <h1 className="text-xl sm:text-2xl font-bold mb-2">Raise New Maintenance Issue</h1>
-          <p className="text-gray-600 text-sm mb-6 sm:mb-8">Fill in details. Photos and assignment are required. Works on mobile & desktop.</p>
+          <p className="text-gray-600 text-sm mb-1">Fill in details. Photos stored on Cloudinary (free, no billing needed).</p>
+          <div className="mb-6 inline-flex items-center gap-2 text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-200">
+            <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+            Firebase (no billing) + Cloudinary (no billing) = 100% Free
+          </div>
 
           <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
@@ -297,7 +318,7 @@ export default function CreateJobPage() {
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium mb-2">Upload Photos *</label>
+                <label className="block text-sm font-medium mb-2">Upload Photos * (Cloudinary - no billing)</label>
                 <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 sm:p-8 text-center hover:border-gray-400 transition">
                   <input
                     type="file"
@@ -310,7 +331,7 @@ export default function CreateJobPage() {
                   <label htmlFor="photo-upload" className="cursor-pointer block">
                     <div className="text-3xl mb-2">📷</div>
                     <div className="text-sm font-medium">Tap to upload photos</div>
-                    <div className="text-xs text-gray-500 mt-1">PNG, JPG up to 10MB each - works on mobile camera</div>
+                    <div className="text-xs text-gray-500 mt-1">PNG, JPG up to 10MB - stored on Cloudinary free, works on mobile camera</div>
                   </label>
                 </div>
                 

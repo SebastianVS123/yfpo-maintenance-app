@@ -4,9 +4,8 @@ import { useEffect, useState } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/hooks/useAuth'
-import { db, storage } from '@/lib/firebase/client'
+import { db } from '@/lib/firebase/client'
 import { doc, getDoc, collection, query, where, getDocs, addDoc, updateDoc } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { getPriorityConfig, getStatusConfig, formatDate } from '@/lib/utils'
 
 export default function JobDetailPage() {
@@ -200,10 +199,20 @@ export default function JobDetailPage() {
     }
     setActionLoading(true)
     try {
-      const fileName = `job-photos/${jobId}/completion-${Date.now()}-${completionForm.photo.name}`
-      const storageRef = ref(storage, fileName)
-      await uploadBytes(storageRef, completionForm.photo)
-      const publicUrl = await getDownloadURL(storageRef)
+      // Upload to Cloudinary via API
+      const formData = new FormData()
+      formData.append('file', completionForm.photo)
+      formData.append('jobId', jobId)
+      formData.append('type', 'completion')
+      
+      const uploadRes = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (!uploadRes.ok) throw new Error('Upload failed')
+      const uploadData = await uploadRes.json()
+      const publicUrl = uploadData.url
 
       await addDoc(collection(db, 'jobPhotos'), {
         job_id: jobId,

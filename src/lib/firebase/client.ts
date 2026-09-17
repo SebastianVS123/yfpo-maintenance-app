@@ -1,7 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
-import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'demo-key',
@@ -12,7 +11,6 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '1:123:web:abc',
 }
 
-// Initialize Firebase
 let app: any
 try {
   app = !getApps().length ? initializeApp(firebaseConfig) : getApp()
@@ -23,6 +21,7 @@ try {
 
 export const auth = getAuth(app)
 export const db = getFirestore(app)
-export const storage = getStorage(app)
+// Storage removed - using Cloudinary now (no billing needed)
+// export const storage = getStorage(app)
 
 export default app
