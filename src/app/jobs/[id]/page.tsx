@@ -26,6 +26,7 @@ export default function JobDetailPage() {
   const [actionLoading, setActionLoading] = useState(false)
   const [planForm, setPlanForm] = useState({ estimated_time: '', message: '' })
   const [completionForm, setCompletionForm] = useState({ notes: '', photo: null as File | null, photoPreview: '' })
+  const [resending, setResending] = useState(false)
 
   useEffect(() => { if (!user) return; fetchJob() }, [user, jobId])
 
@@ -99,6 +100,82 @@ export default function JobDetailPage() {
     }
   }
 
+  const handleResendEmail = async () => {
+    if (!job) return
+    setResending(true)
+    try {
+      const assignees = assignments.map((a: any) => ({ name: a.personnel?.full_name || a.profile?.full_name || 'Operator', email: a.personnel?.email || a.profile?.email })).filter((a: any) => a.email)
+      if (assignees.length === 0) return alert('No assignees to email')
+      
+      const res = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'assignment',
+          jobId: job.id,
+          title: job.title,
+          location: job.location,
+          observedAt: job.observed_at,
+          requiredActions: job.required_actions,
+          departments: job.departments,
+          priority: job.priority,
+          photos: photos.filter((p: any) => p.type === 'issue').map((p: any) => p.url),
+          createdByName: job.createdByName || profile?.full_name,
+          createdByEmail: job.createdByEmail || profile?.email,
+          assignees,
+          dueDate: job.due_date,
+          appUrl: window.location.origin
+        })
+      })
+      const data = await res.json()
+      if (data.success) {
+        alert(`Email resent to ${assignees.length} person(s): ${assignees.map((a: any) => a.email).join(', ')}`)
+        await addDoc(collection(db, 'jobCommits'), { job_id: jobId, user_id: user!.uid, userName: profile?.full_name, userEmail: profile?.email, message: `Resent assignment email to ${assignees.map((a: any) => a.name).join(', ')}`, type: 'status_update', created_at: new Date() })
+        fetchJob()
+      } else {
+        alert('Failed to resend: ' + (data.error || JSON.stringify(data)))
+      }
+    } catch (e: any) {
+      alert('Resend failed: ' + e.message)
+    } finally {
+      setResending(false)
+    }
+  }
+
+  const handleFollowUp = async () => {
+    const msg = prompt('Follow-up message to assignees:')
+    if (!msg) return
+    try {
+      await addDoc(collection(db, 'jobCommits'), { job_id: jobId, user_id: user!.uid, userName: profile?.full_name, userEmail: profile?.email, message: `FOLLOW-UP: ${msg}`, type: 'plan', created_at: new Date() })
+      // Also resend email with follow-up note
+      const assignees = assignments.map((a: any) => ({ name: a.personnel?.full_name || 'Operator', email: a.personnel?.email })).filter((a: any) => a.email)
+      if (assignees.length > 0) {
+        await fetch('/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'assignment',
+            jobId: job.id,
+            title: `[FOLLOW-UP] ${job.title}`,
+            location: job.location,
+            observedAt: job.observed_at,
+            requiredActions: `${job.required_actions}\n\n--- FOLLOW-UP FROM ${profile?.full_name} ---\n${msg}`,
+            departments: job.departments,
+            priority: job.priority,
+            photos: photos.filter((p: any) => p.type === 'issue').map((p: any) => p.url),
+            createdByName: profile?.full_name,
+            createdByEmail: profile?.email,
+            assignees,
+            dueDate: job.due_date,
+            appUrl: window.location.origin
+          })
+        })
+      }
+      alert('Follow-up sent and logged')
+      fetchJob()
+    } catch (e: any) { alert(e.message) }
+  }
+
   const handleCompleteJob = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!completionForm.photo) return alert('Photo required')
@@ -150,7 +227,7 @@ export default function JobDetailPage() {
             </div>
           </div>
           <div className="space-y-6">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5"><h3 className="font-medium text-white mb-3 text-sm">Assigned</h3><div className="space-y-2">{assignments.map((a: any) => <div key={a.id} className="flex justify-between items-center p-2.5 bg-zinc-800 rounded-lg border border-zinc-700"><div><div className="text-sm text-white">{a.personnel?.full_name || a.profile?.full_name}</div><div className="text-xs text-zinc-400">{a.personnel?.email}</div></div><span className="text-xs px-2 py-1 bg-zinc-700 text-zinc-300 rounded-full">{a.status}</span></div>)}</div></div>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5"><div className="flex justify-between items-center mb-3"><h3 className="font-medium text-white text-sm">Assigned</h3>{isManager && <div className="flex gap-1.5"><button onClick={handleResendEmail} disabled={resending} className="text-[11px] px-2.5 py-1.5 bg-white text-black rounded-lg font-medium hover:bg-zinc-200 disabled:opacity-50">{resending ? 'Sending...' : '📧 Resend'}</button><button onClick={handleFollowUp} className="text-[11px] px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-700">Follow-up</button></div>}</div><div className="space-y-2">{assignments.map((a: any) => <div key={a.id} className="flex justify-between items-center p-2.5 bg-zinc-800 rounded-lg border border-zinc-700"><div><div className="text-sm text-white">{a.personnel?.full_name || a.profile?.full_name}</div><div className="text-xs text-zinc-400">{a.personnel?.email}</div></div><span className="text-xs px-2 py-1 bg-zinc-700 text-zinc-300 rounded-full">{a.status}</span></div>)}</div></div>
             {isAssignee && job.status !== 'completed' && <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5"><h3 className="font-medium text-white mb-3 text-sm">Complete Job</h3>{!showComplete ? <button onClick={() => setShowComplete(true)} className="w-full bg-white text-black py-3 rounded-lg font-medium">Mark Completed</button> : <form onSubmit={handleCompleteJob} className="space-y-3"><input type="file" accept="image/*" capture="environment" required onChange={handleCompletionPhoto} className="w-full text-xs text-zinc-400" />{completionForm.photoPreview && <img src={completionForm.photoPreview} className="w-full h-32 object-cover rounded-lg border border-zinc-700" />}<textarea value={completionForm.notes} onChange={e => setCompletionForm({ ...completionForm, notes: e.target.value })} placeholder="Completion notes..." className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm" rows={2} /><div className="flex gap-2"><button type="button" onClick={() => setShowComplete(false)} className="flex-1 border border-zinc-700 py-2.5 rounded-lg text-sm text-zinc-300">Cancel</button><button disabled={actionLoading} className="flex-1 bg-white text-black py-2.5 rounded-lg text-sm font-medium">{actionLoading ? 'Saving...' : 'Confirm'}</button></div></form>}</div>}
           </div>
         </div>

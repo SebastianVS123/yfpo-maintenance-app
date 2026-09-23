@@ -221,15 +221,6 @@ export default function AdminPage() {
             </div>
           )}
         </div>
-
-        <div className="mt-6 bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-          <h4 className="text-sm font-medium text-white mb-2">Role Difference</h4>
-          <div className="grid md:grid-cols-3 gap-4 text-xs">
-            <div><div className="font-medium text-zinc-200 mb-1">Operator</div><ul className="text-zinc-400 space-y-1 list-disc list-inside"><li>Views only assigned jobs</li><li>Starts & completes jobs</li><li>Adds plan & photos</li></ul></div>
-            <div><div className="font-medium text-zinc-200 mb-1">Manager</div><ul className="text-zinc-400 space-y-1 list-disc list-inside"><li>Creates jobs</li><li>Sees <strong className="text-white">all jobs they issued</strong></li><li>Manages personnel</li><li>Assigns only confirmed accounts</li></ul></div>
-            <div><div className="font-medium text-zinc-200 mb-1">Admin</div><ul className="text-zinc-400 space-y-1 list-disc list-inside"><li>All manager powers</li><li>Sees <strong className="text-white">ALL jobs from all managers</strong></li><li>Can manage all personnel & roles</li><li>Full system access</li></ul></div>
-          </div>
-        </div>
       </main>
     </div>
   )

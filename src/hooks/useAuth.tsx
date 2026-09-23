@@ -23,6 +23,9 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType)
 
+// Auto-admin email - will always be admin
+const ADMIN_EMAIL = 'svanschoor1@yfpo.com'
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
@@ -32,33 +35,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser)
       if (firebaseUser) {
+        const emailLower = firebaseUser.email?.toLowerCase() || ''
+        const isAutoAdmin = emailLower === ADMIN_EMAIL.toLowerCase()
+
         const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
         if (profileDoc.exists()) {
-          setProfile(profileDoc.data() as UserProfile)
+          let existingProfile = profileDoc.data() as UserProfile
+          
+          // Auto-promote svanschoor1@yfpo.com to admin if not already
+          if (isAutoAdmin && existingProfile.role !== 'admin') {
+            await updateDoc(doc(db, 'users', firebaseUser.uid), { role: 'admin' })
+            existingProfile = { ...existingProfile, role: 'admin' }
+            // Also update personnel if exists
+            try {
+              const personnelQuery = query(collection(db, 'personnel'), where('email', '==', emailLower))
+              const personnelSnap = await getDocs(personnelQuery)
+              if (!personnelSnap.empty) {
+                await updateDoc(doc(db, 'personnel', personnelSnap.docs[0].id), { role: 'admin', has_account: true, user_id: firebaseUser.uid })
+              }
+            } catch {}
+          }
+          
+          setProfile(existingProfile)
         } else {
-          const personnelQuery = query(collection(db, 'personnel'), where('email', '==', firebaseUser.email?.toLowerCase()))
+          const personnelQuery = query(collection(db, 'personnel'), where('email', '==', emailLower))
           const personnelSnap = await getDocs(personnelQuery)
           if (!personnelSnap.empty) {
             const personnel = personnelSnap.docs[0].data()
             const personnelId = personnelSnap.docs[0].id
+            const role = isAutoAdmin ? 'admin' : personnel.role
             const newProfile: UserProfile = {
               id: firebaseUser.uid,
-              email: firebaseUser.email!.toLowerCase(),
+              email: emailLower,
               full_name: personnel.full_name,
-              role: personnel.role,
+              role,
               created_at: new Date()
             }
             await setDoc(doc(db, 'users', firebaseUser.uid), newProfile)
             setProfile(newProfile)
-
-            // Mark personnel as confirmed (has account now)
             await updateDoc(doc(db, 'personnel', personnelId), {
               has_account: true,
               user_id: firebaseUser.uid,
               confirmed_at: new Date(),
-              is_active: true
+              is_active: true,
+              ...(isAutoAdmin ? { role: 'admin' } : {})
             })
-
             const assignmentsQuery = query(collection(db, 'jobAssignments'), where('personnel_id', '==', personnelId))
             const assignmentsSnap = await getDocs(assignmentsQuery)
             for (const assignmentDoc of assignmentsSnap.docs) {
@@ -69,9 +90,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const isFirstUser = usersSnap.empty
             const newProfile: UserProfile = {
               id: firebaseUser.uid,
-              email: firebaseUser.email!.toLowerCase(),
+              email: emailLower,
               full_name: firebaseUser.displayName || firebaseUser.email!.split('@')[0],
-              role: isFirstUser ? 'manager' : 'operator',
+              role: isAutoAdmin ? 'admin' : (isFirstUser ? 'manager' : 'operator'),
               created_at: new Date()
             }
             await setDoc(doc(db, 'users', firebaseUser.uid), newProfile)
@@ -91,26 +112,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signUp = async (email: string, password: string, fullName: string) => {
-    const personnelQuery = query(collection(db, 'personnel'), where('email', '==', email.toLowerCase().trim()))
+    const emailLower = email.toLowerCase().trim()
+    const isAutoAdmin = emailLower === ADMIN_EMAIL.toLowerCase()
+    
+    const personnelQuery = query(collection(db, 'personnel'), where('email', '==', emailLower))
     const personnelSnap = await getDocs(personnelQuery)
     let matchedPersonnel = null
     if (!personnelSnap.empty) {
       matchedPersonnel = { id: personnelSnap.docs[0].id, ...personnelSnap.docs[0].data() }
     } else {
       const allPersonnelSnap = await getDocs(collection(db, 'personnel'))
-      if (!allPersonnelSnap.empty) {
-        throw new Error('This email is not registered. Ask manager to add you in Personnel Management first.')
+      if (!allPersonnelSnap.empty && !isAutoAdmin) {
+        throw new Error('This email is not registered. Ask manager to add you first.')
       }
     }
 
-    const userCredential = await createUserWithEmailAndPassword(auth, email.toLowerCase().trim(), password)
+    const userCredential = await createUserWithEmailAndPassword(auth, emailLower, password)
     const firebaseUser = userCredential.user
-    const role = matchedPersonnel?.role || 'manager'
+    const role = isAutoAdmin ? 'admin' : (matchedPersonnel?.role || 'manager')
     const name = fullName || matchedPersonnel?.full_name || email.split('@')[0]
 
     const newProfile: UserProfile = {
       id: firebaseUser.uid,
-      email: email.toLowerCase().trim(),
+      email: emailLower,
       full_name: name,
       role,
       created_at: new Date()
@@ -118,14 +142,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await setDoc(doc(db, 'users', firebaseUser.uid), newProfile)
 
     if (matchedPersonnel) {
-      // Mark personnel as confirmed
       await updateDoc(doc(db, 'personnel', matchedPersonnel.id), {
         has_account: true,
         user_id: firebaseUser.uid,
         confirmed_at: new Date(),
-        is_active: true
+        is_active: true,
+        ...(isAutoAdmin ? { role: 'admin' } : {})
       })
-
       const assignmentsQuery = query(collection(db, 'jobAssignments'), where('personnel_id', '==', matchedPersonnel.id))
       const assignmentsSnap = await getDocs(assignmentsQuery)
       for (const assignmentDoc of assignmentsSnap.docs) {
