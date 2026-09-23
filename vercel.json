@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/check-overdue?secret=dev-secret",
+      "path": "/api/check-overdue?secret=my-secret-123",
       "schedule": "0 * * * *"
     }
   ]

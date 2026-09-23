@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --border: #262626;
+  --muted: #262626;
+  --muted-foreground: #a1a1aa;
 }
 
 * {
@@ -14,22 +19,20 @@ html {
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: #0a0a0a;
+  color: #fafafa;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Mobile tap highlight */
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Better focus for mobile */
 input, textarea, select, button {
-  font-size: 16px; /* Prevents zoom on iOS */
+  font-size: 16px;
 }
 
 @media (max-width: 640px) {
@@ -38,21 +41,20 @@ input, textarea, select, button {
   }
 }
 
-/* Custom scrollbar for mobile */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: #171717;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: #404040;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: #525252;
 }
