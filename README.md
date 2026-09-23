@@ -1,169 +1,83 @@
-# Maintenance Job Card System 🔧 — Firebase Edition (Free, No Project Limit)
+# Maintenance Job Card App - Ready to Deploy
 
-A full-stack, **fully responsive** (mobile + desktop) web app for managing maintenance issues. Managers create job cards, assign to operators, operators start/complete jobs with photos, with email notifications and overdue tracking.
+**Built in Arena Chat - No Terminal Needed for Deploy**
 
-Built with **Next.js 15, Firebase (Auth + Firestore + Storage), Tailwind CSS, Resend**.
+Stack: Next.js + Firebase (Auth + Firestore) + Cloudinary (photos) - All FREE, no billing card
 
-## Why Firebase Instead of Supabase?
+## What You Have
 
-You had 2 free Supabase projects limit. Firebase Spark (free) has:
-- **No project limit**
-- Auth: 50k MAU free
-- Firestore: 50k reads / 20k writes per day free
-- Storage: 5GB free
-- Perfect for small maintenance teams (5-20 users)
-- Real-time, mobile-friendly, scales cheaply ($0.06/100k reads after free)
+This folder `maintenance-jobcard-app` is your complete app. It:
+- Manager creates jobs (what, where, when, actions, departments, priority, photos, assigns to people)
+- Operator gets email link, creates password first time, sees assigned jobs, starts job (auto), adds plan, completes with photo
+- Works on phone + desktop, fully responsive
+- Ready to migrate to local company server later (one file swap)
 
-## Features — Fully Responsive
+## Files
 
-### 📱 Mobile & Desktop UI
-- **Mobile-first**: All pages work on phone (camera upload, tap-friendly, bottom sheets)
-- Responsive headers with hamburger menu on mobile
-- Job cards: stacked layout on mobile, side-by-side on desktop
-- Forms: 16px font to prevent iOS zoom, large tap targets
-- Tables: desktop table, mobile cards
-- Photos: grid adapts 2 cols mobile → 3 cols desktop
-- Works on: iPhone, Android, iPad, Desktop
+- `src/` - App code (already built, no need to edit)
+- `.env.example` - Shows what keys you need
+- `package.json` - Dependencies
+- `vercel.json` - For cron (overdue checks)
 
-### Manager / Admin
-- Login → Admin dashboard with stats (total/open/in progress/completed/overdue) — responsive grid 3 cols mobile, 5 desktop
-- See past issues: photo preview, status, when & to whom allocated
-- **Create Job**: What, Where, When Seen, Required Actions, Departments (multi-select: Quality, Safety, Logistics, Production, Management), Priority, Due Date, Photos (multiple, camera on mobile), Allocate personnel (multi-select)
-- **Personnel Management**: Add/edit roles, emails, department, active/inactive + "Add 5 Placeholders"
-- Job detail with commits, photos, assignments
-- Receives email on completion + OVERDUE
+## Deploy - 4 Steps, No Terminal, Just Copy-Paste
 
-### Operator
-- Receives email with priority VERY clearly (colored banner), breakdown, link
-- Clicks link → sign in, first time creates password via signup → system matches email with personnel pre-created by admin (Firestore query)
-- Without link: dashboard shows all allocated jobs, UNOPENED badge, priority
-- Via link: auto-opens specific job after sign in and **starts job** (first open = start time)
-- Provides estimated time + plan of action
-- Multiple assignees see previous commits + start time, can contribute
-- Completion: must upload completion photo (camera on mobile) + confirm
+You did Render + Supabase + GitHub before - same flow.
 
-### System
-- Email via Resend (assignment, completion, overdue)
-- Overdue: both manager due date + estimated time heuristic (critical >4h, high >12h, medium >48h, low >7d)
-- Firebase Storage for photos
-- Role-based auth (manager, operator, admin)
-- Firestore security rules (permissive for MVP, hardened example provided)
+### 1. Firebase (10 min)
 
-## Tech Stack
-- Next.js 15 App Router (client components for Firebase)
-- Firebase Auth, Firestore, Storage
-- Tailwind CSS v4
-- Resend for emails
-- TypeScript
+- https://console.firebase.google.com → Add Project → `maintenance-app` → No Analytics → Create
+- Top search bar → Type `Authentication` → Get Started → Sign-in method → Email/Password → Enable → Save
+- Top search → Type `Firestore` → Create database → `europe-west3` → Test mode → Create
+- Gear ⚙️ → Project Settings → General → Web icon `</>` → Nickname `web` → Register → Copy 6 values
+- Same Settings → Service accounts → Generate private key → Download JSON → Copy 3 values (project_id, client_email, private_key)
 
-## Quick Start (Local)
+### 2. Cloudinary (3 min)
 
-1. **Clone & Install**
-```bash
-git clone <your-repo>
-cd maintenance-jobcard-app
-npm install
-```
+- https://cloudinary.com → Sign Up Free (no card) → Dashboard → Copy Cloud name, API Key, API Secret
 
-2. **Firebase Setup (see firebase-setup.md for in-depth)**
-- Create project at https://console.firebase.google.com
-- Enable Auth → Email/Password
-- Create Firestore → Start in Test Mode → Location europe-west
-- Enable Storage → Test Mode
-- Project Settings → General → Web App → Copy config
-- Project Settings → Service Accounts → Generate private key → Download JSON
+### 3. GitHub (5 min, No Terminal)
 
-3. **Env**
-```bash
-cp .env.example .env.local
-# Fill values - see .env.example
-```
+- Download `maintenance-app-MAC-FIXED.zip` from Arena → On Mac double-click to unzip (if fails, use tar.gz or tell me repo URL and I push for you)
+- https://github.com → New repo → `maintenance-app` → Public → Create → Click `uploading an existing file` → Drag ALL files from unzipped folder → Commit
+
+**No zip working?** Create empty repo, paste URL here, I push code for you from Arena.
+
+### 4. Render (10 min, No Terminal)
+
+- https://render.com → Sign Up with GitHub → New + → Web Service → Connect `maintenance-app` repo
+- Build: `npm install && npm run build` | Start: `npm start`
+- Environment Variables → Add:
 
 ```
-NEXT_PUBLIC_FIREBASE_API_KEY=...
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
-NEXT_PUBLIC_FIREBASE_APP_ID=...
-
-FIREBASE_PROJECT_ID=...
-FIREBASE_CLIENT_EMAIL=...
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-
-RESEND_API_KEY=re_...
-RESEND_FROM_EMAIL=maintenance@yourdomain.com
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-CRON_SECRET=random-secret
+NEXT_PUBLIC_FIREBASE_API_KEY= apiKey
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN= authDomain
+NEXT_PUBLIC_FIREBASE_PROJECT_ID= projectId
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET= storageBucket
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID= messagingSenderId
+NEXT_PUBLIC_FIREBASE_APP_ID= appId
+FIREBASE_PROJECT_ID= project_id
+FIREBASE_CLIENT_EMAIL= client_email
+FIREBASE_PRIVATE_KEY= "-----BEGIN PRIVATE KEY-----\n...private_key...\n-----END PRIVATE KEY-----\n"
+NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME= cloud name
+CLOUDINARY_API_KEY= api key
+CLOUDINARY_API_SECRET= api secret
+NEXT_PUBLIC_APP_URL= https://maintenance-app.onrender.com (update after first deploy)
+CRON_SECRET= my-secret-123
+RESEND_FROM_EMAIL= onboarding@resend.dev
 ```
 
-4. **Run**
-```bash
-npm run dev
-```
+- Create Web Service → Live URL → Copy URL → Edit NEXT_PUBLIC_APP_URL → Paste live URL → Save → Redeploy
+- Firebase → Authentication → Settings → Authorized domains → Add domain → Paste `maintenance-app.onrender.com`
 
-Open http://localhost:3000 → signup first user becomes manager.
+Done! Live!
 
-## Firestore Collections
+## For Tomorrow
 
-- `users` (id = Auth UID, email, full_name, role, created_at)
-- `personnel` (email unique, full_name, role, department, is_active)
-- `jobCards` (title, location, observed_at, required_actions, departments[], priority, status, created_by, createdByName, etc)
-- `jobPhotos` (job_id, url, type issue/completion)
-- `jobAssignments` (job_id, personnel_id, profile_id, status unopened/opened/started/completed)
-- `jobCommits` (job_id, user_id, userName, message, estimated_time, type)
+Everything is sorted, clean, builds. One README only. No extra guides.
 
-No SQL needed - collections auto-create on first write.
+When you return:
+1. Tell me if you have Firebase + Cloudinary keys
+2. Tell me GitHub repo URL (or if zip still fails, I push for you)
+3. I help you deploy to Render in 10 min
 
-## Deployment - Go Live (Firebase)
-
-See `firebase-setup.md` for full in-depth steps.
-
-### 1. Push to GitHub
-```bash
-git init
-git add .
-git commit -m "Firebase edition - mobile responsive"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/maintenance-jobcard-app.git
-git push -u origin main
-```
-
-### 2. Firebase Production Rules
-- Firestore Rules → Paste secure rules from firebase-setup.md
-- Storage Rules → Paste
-
-### 3. Vercel Deploy
-- Import GitHub repo
-- Add env vars (all Firebase + Resend + APP_URL = https://your-app.vercel.app)
-- Deploy
-- After deploy: Firebase Console → Auth → Settings → Authorized domains → Add Vercel domain
-- Update NEXT_PUBLIC_APP_URL to Vercel URL → Redeploy
-
-### 4. Resend Domain
-- Verify domain in Resend, update FROM email
-
-### 5. Overdue Cron
-- `vercel.json` has cron: `/api/check-overdue?secret=YOUR_SECRET` hourly
-- Or use cron-job.org free calling that URL every 30 min
-
-### 6. Test Flow
-- Manager creates job → Operator gets email → Signup with same email → Dashboard → Start → Complete → Manager gets completion email
-
-## Mobile Responsiveness Details
-
-- **Headers**: Hamburger menu on < md, full buttons on desktop
-- **Stats**: 3 cols on mobile, 5 on desktop
-- **Job Cards**: Mobile = photo left + stacked info, Desktop = horizontal with more details
-- **Forms**: Single col on mobile, 2 cols on desktop, 16px inputs to prevent zoom
-- **Photos**: Camera capture attribute `capture="environment"` on completion
-- **Personnel**: Desktop table, mobile cards
-- **All buttons**: min 44px height for tap, large enough for thumbs
-
-Tested on iPhone SE (375px) to 4K desktop.
-
-## Email Templates
-Same as before - priority badge very clearly, breakdown, link. Mocked if no RESEND_API_KEY.
-
-## License
-MIT
+No rambling, just copy-paste.
