@@ -104,8 +104,33 @@ export default function JobDetailPage() {
     if (!job) return
     setResending(true)
     try {
-      const assignees = assignments.map((a: any) => ({ name: a.personnel?.full_name || a.profile?.full_name || 'Operator', email: a.personnel?.email || a.profile?.email })).filter((a: any) => a.email)
-      if (assignees.length === 0) return alert('No assignees to email')
+      // Fetch outstanding for each assignee
+      const assigneesWithOutstanding = await Promise.all(
+        assignments.map(async (a: any) => {
+          const personnelId = a.personnel_id
+          let outstanding: any[] = []
+          if (personnelId) {
+            try {
+              const assignmentsQ = query(collection(db, 'jobAssignments'), where('personnel_id', '==', personnelId))
+              const assignmentsSnap = await getDocs(assignmentsQ)
+              for (const docSnap of assignmentsSnap.docs) {
+                const ad = docSnap.data()
+                if (['open','opened','started','in_progress','overdue'].includes(ad.status)) {
+                  const { getDoc } = await import('firebase/firestore')
+                  const jSnap = await getDoc(doc(db, 'jobCards', ad.job_id))
+                  if (jSnap.exists() && ['open','started','in_progress','overdue'].includes(jSnap.data().status)) {
+                    outstanding.push({ id: jSnap.id, title: jSnap.data().title, location: jSnap.data().location, priority: jSnap.data().priority, status: jSnap.data().status })
+                  }
+                }
+              }
+            } catch {}
+          }
+          return { name: a.personnel?.full_name || a.profile?.full_name || 'Operator', email: a.personnel?.email || a.profile?.email, outstandingJobs: outstanding }
+        })
+      )
+
+      const filtered = assigneesWithOutstanding.filter((a: any) => a.email)
+      if (filtered.length === 0) return alert('No assignees to email')
       
       const res = await fetch('/api/send-email', {
         method: 'POST',
@@ -122,18 +147,18 @@ export default function JobDetailPage() {
           photos: photos.filter((p: any) => p.type === 'issue').map((p: any) => p.url),
           createdByName: job.createdByName || profile?.full_name,
           createdByEmail: job.createdByEmail || profile?.email,
-          assignees,
+          assignees: filtered,
           dueDate: job.due_date,
           appUrl: window.location.origin
         })
       })
       const data = await res.json()
       if (data.success) {
-        alert(`Email resent to ${assignees.length} person(s): ${assignees.map((a: any) => a.email).join(', ')}`)
-        await addDoc(collection(db, 'jobCommits'), { job_id: jobId, user_id: user!.uid, userName: profile?.full_name, userEmail: profile?.email, message: `Resent assignment email to ${assignees.map((a: any) => a.name).join(', ')}`, type: 'status_update', created_at: new Date() })
+        alert(`Email resent to ${filtered.length} person(s) with outstanding jobs list`)
+        await addDoc(collection(db, 'jobCommits'), { job_id: jobId, user_id: user!.uid, userName: profile?.full_name, userEmail: profile?.email, message: `Resent assignment email to ${filtered.map((a: any) => a.name).join(', ')}`, type: 'status_update', created_at: new Date() })
         fetchJob()
       } else {
-        alert('Failed to resend: ' + (data.error || JSON.stringify(data)))
+        alert('Failed: ' + JSON.stringify(data).slice(0,300))
       }
     } catch (e: any) {
       alert('Resend failed: ' + e.message)
