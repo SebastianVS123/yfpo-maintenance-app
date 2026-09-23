@@ -1,14 +1,6 @@
 'use client'
-
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-import { 
-  User,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  Auth
-} from 'firebase/auth'
+import { User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth'
 import { doc, getDoc, setDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase/client'
 
@@ -40,17 +32,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser)
       if (firebaseUser) {
-        // Fetch profile
         const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
         if (profileDoc.exists()) {
           setProfile(profileDoc.data() as UserProfile)
         } else {
-          // Try to find personnel match and create profile
           const personnelQuery = query(collection(db, 'personnel'), where('email', '==', firebaseUser.email?.toLowerCase()))
           const personnelSnap = await getDocs(personnelQuery)
-          
           if (!personnelSnap.empty) {
             const personnel = personnelSnap.docs[0].data()
+            const personnelId = personnelSnap.docs[0].id
             const newProfile: UserProfile = {
               id: firebaseUser.uid,
               email: firebaseUser.email!.toLowerCase(),
@@ -61,19 +51,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await setDoc(doc(db, 'users', firebaseUser.uid), newProfile)
             setProfile(newProfile)
 
-            // Link assignments
-            const assignmentsQuery = query(collection(db, 'jobAssignments'), where('personnel_id', '==', personnelSnap.docs[0].id))
+            // Mark personnel as confirmed (has account now)
+            await updateDoc(doc(db, 'personnel', personnelId), {
+              has_account: true,
+              user_id: firebaseUser.uid,
+              confirmed_at: new Date(),
+              is_active: true
+            })
+
+            const assignmentsQuery = query(collection(db, 'jobAssignments'), where('personnel_id', '==', personnelId))
             const assignmentsSnap = await getDocs(assignmentsQuery)
             for (const assignmentDoc of assignmentsSnap.docs) {
-              await updateDoc(doc(db, 'jobAssignments', assignmentDoc.id), {
-                profile_id: firebaseUser.uid
-              })
+              await updateDoc(doc(db, 'jobAssignments', assignmentDoc.id), { profile_id: firebaseUser.uid })
             }
           } else {
-            // Check if first user - become manager
             const usersSnap = await getDocs(collection(db, 'users'))
             const isFirstUser = usersSnap.empty
-            
             const newProfile: UserProfile = {
               id: firebaseUser.uid,
               email: firebaseUser.email!.toLowerCase(),
@@ -90,7 +83,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setLoading(false)
     })
-
     return () => unsubscribe()
   }, [])
 
@@ -99,24 +91,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signUp = async (email: string, password: string, fullName: string) => {
-    // Check personnel exists
     const personnelQuery = query(collection(db, 'personnel'), where('email', '==', email.toLowerCase().trim()))
     const personnelSnap = await getDocs(personnelQuery)
-    
     let matchedPersonnel = null
     if (!personnelSnap.empty) {
       matchedPersonnel = { id: personnelSnap.docs[0].id, ...personnelSnap.docs[0].data() }
     } else {
-      // Check if any personnel exists at all
       const allPersonnelSnap = await getDocs(collection(db, 'personnel'))
       if (!allPersonnelSnap.empty) {
-        throw new Error('This email is not registered. Please ask your manager to add you in Personnel Management first.')
+        throw new Error('This email is not registered. Ask manager to add you in Personnel Management first.')
       }
     }
 
     const userCredential = await createUserWithEmailAndPassword(auth, email.toLowerCase().trim(), password)
     const firebaseUser = userCredential.user
-
     const role = matchedPersonnel?.role || 'manager'
     const name = fullName || matchedPersonnel?.full_name || email.split('@')[0]
 
@@ -127,16 +115,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       role,
       created_at: new Date()
     }
-
     await setDoc(doc(db, 'users', firebaseUser.uid), newProfile)
 
     if (matchedPersonnel) {
+      // Mark personnel as confirmed
+      await updateDoc(doc(db, 'personnel', matchedPersonnel.id), {
+        has_account: true,
+        user_id: firebaseUser.uid,
+        confirmed_at: new Date(),
+        is_active: true
+      })
+
       const assignmentsQuery = query(collection(db, 'jobAssignments'), where('personnel_id', '==', matchedPersonnel.id))
       const assignmentsSnap = await getDocs(assignmentsQuery)
       for (const assignmentDoc of assignmentsSnap.docs) {
-        await updateDoc(doc(db, 'jobAssignments', assignmentDoc.id), {
-          profile_id: firebaseUser.uid
-        })
+        await updateDoc(doc(db, 'jobAssignments', assignmentDoc.id), { profile_id: firebaseUser.uid })
       }
     }
 
