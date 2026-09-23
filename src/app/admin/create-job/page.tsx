@@ -19,7 +19,9 @@ export default function CreateJobPage() {
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([])
   const [form, setForm] = useState({ title: '', location: '', observed_at: new Date().toISOString().slice(0,16), required_actions: '', departments: [] as string[], priority: 'medium' as any, due_date: '', assignedPersonnel: [] as string[] })
 
-  useEffect(() => { fetchPersonnel() }, [])
+  const [myPersonnelId, setMyPersonnelId] = useState<string | null>(null)
+
+  useEffect(() => { fetchPersonnel() }, [user, profile])
   const fetchPersonnel = async () => {
     const snap = await getDocs(collection(db, 'personnel'))
     const list = snap.docs
@@ -27,6 +29,21 @@ export default function CreateJobPage() {
       .filter((d: any) => d.is_active !== false && d.has_account === true)
       .map(d => d as Personnel)
     setPersonnelList(list)
+
+    // Find my personnel ID to auto-assign
+    if (profile?.email) {
+      const myDoc = snap.docs.find(d => d.data().email?.toLowerCase() === profile.email.toLowerCase())
+      if (myDoc) {
+        setMyPersonnelId(myDoc.id)
+        // Auto-assign self if not already selected
+        setForm(prev => {
+          if (!prev.assignedPersonnel.includes(myDoc.id)) {
+            return { ...prev, assignedPersonnel: [...prev.assignedPersonnel, myDoc.id] }
+          }
+          return prev
+        })
+      }
+    }
   }
 
   const compressImage = (file: File): Promise<File> => {
@@ -231,7 +248,10 @@ export default function CreateJobPage() {
               <div><label className="text-sm text-zinc-300 mb-2 block">Due Date</label><input type="datetime-local" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-white outline-none" /></div>
               <div className="md:col-span-2"><label className="text-sm text-zinc-300 mb-2 block">Departments *</label><div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{DEPARTMENTS.map(d => <label key={d} className={`p-3 border rounded-lg text-center cursor-pointer transition text-sm ${form.departments.includes(d) ? 'bg-white text-black border-white' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}><input type="checkbox" checked={form.departments.includes(d)} onChange={() => toggleDept(d)} className="hidden" />{d}</label>)}</div></div>
               <div className="md:col-span-2"><label className="text-sm text-zinc-300 mb-2 block">Photos</label><div className="border border-dashed border-zinc-700 rounded-lg p-8 text-center hover:border-zinc-600"><input type="file" multiple accept="image/*" onChange={handlePhotoChange} id="up" className="hidden" /><label htmlFor="up" className="cursor-pointer"><div className="text-2xl mb-1">📷</div><div className="text-sm text-zinc-300">Upload photos</div><div className="text-xs text-zinc-500 mt-1">Compressed & sent in background</div></label></div>{photoPreviews.length > 0 && <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-3">{photoPreviews.map((p,i) => <div key={i} className="relative"><img src={p} className="w-full h-20 object-cover rounded-lg border border-zinc-700" /><button type="button" onClick={() => removePhoto(i)} className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 text-white rounded-full text-xs">✕</button></div>)}</div>}</div>
-              <div className="md:col-span-2"><label className="text-sm text-zinc-300 mb-2 block">Assign To * (confirmed only)</label>{personnelList.length === 0 ? <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg"><div className="text-sm text-white font-medium">No confirmed personnel</div><Link href="/admin/personnel" className="text-xs underline text-white mt-2 inline-block">Go to Personnel</Link></div> : <div className="border border-zinc-700 rounded-lg max-h-60 overflow-y-auto divide-y divide-zinc-800 bg-zinc-800">{personnelList.map(per => <label key={per.id} className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-zinc-700 ${form.assignedPersonnel.includes(per.id) ? 'bg-zinc-700' : ''}`}><input type="checkbox" checked={form.assignedPersonnel.includes(per.id)} onChange={() => togglePer(per.id)} className="w-5 h-5" /><div><div className="flex items-center gap-2"><span className="text-sm text-white">{per.full_name}</span><span className="text-[10px] bg-emerald-900/40 text-emerald-300 border border-emerald-800 px-1.5 py-0.5 rounded-full">Confirmed</span></div><div className="text-xs text-zinc-400">{per.email}</div></div></label>)}</div>}<p className="text-xs text-zinc-500 mt-2">{form.assignedPersonnel.length} selected • Will receive email with outstanding jobs list</p></div>
+              <div className="md:col-span-2"><label className="text-sm text-zinc-300 mb-2 block">Assign To * (confirmed only) • You are auto-assigned</label>{personnelList.length === 0 ? <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-lg"><div className="text-sm text-white font-medium">No confirmed personnel</div><Link href="/admin/personnel" className="text-xs underline text-white mt-2 inline-block">Go to Personnel</Link></div> : <div className="border border-zinc-700 rounded-lg max-h-60 overflow-y-auto divide-y divide-zinc-800 bg-zinc-800">{personnelList.map(per => {
+                const isMe = per.id === myPersonnelId
+                return <label key={per.id} className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-zinc-700 ${form.assignedPersonnel.includes(per.id) ? 'bg-zinc-700' : ''} ${isMe ? 'border-l-2 border-l-white' : ''}`}><input type="checkbox" checked={form.assignedPersonnel.includes(per.id)} onChange={() => togglePer(per.id)} className="w-5 h-5" disabled={isMe} /><div><div className="flex items-center gap-2"><span className="text-sm text-white">{per.full_name} {isMe && '(You - Issuer)'}</span><span className="text-[10px] bg-emerald-900/40 text-emerald-300 border border-emerald-800 px-1.5 py-0.5 rounded-full">Confirmed</span>{isMe && <span className="text-[10px] bg-white text-black px-1.5 py-0.5 rounded-full font-bold">Auto</span>}</div><div className="text-xs text-zinc-400">{per.email}</div></div></label>
+              })}</div>}<p className="text-xs text-zinc-500 mt-2">{form.assignedPersonnel.length} selected • You (issuer) auto-assigned + will receive confirmation email • Others receive assignment email with outstanding list</p></div>
             </div>
             <div className="flex gap-3 pt-6 border-t border-zinc-800"><Link href="/admin" className="px-6 py-3 border border-zinc-700 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800">Cancel</Link><button disabled={loading} className="flex-1 bg-white text-black py-3 rounded-lg font-medium hover:bg-zinc-200 disabled:opacity-50 flex items-center justify-center gap-2">{loading ? <><div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>{loadingStep}</> : 'Create Job Card'}</button></div>
           </form>
