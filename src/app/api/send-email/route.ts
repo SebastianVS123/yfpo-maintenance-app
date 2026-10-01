@@ -10,9 +10,10 @@ export async function POST(request: NextRequest) {
 
     if (type === 'assignment') {
       // Check config
+      const provider = process.env.EMAIL_PROVIDER || (process.env.GMAIL_USER ? 'gmail' : 'resend')
+      const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
       const hasResendKey = !!process.env.RESEND_API_KEY
-      const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
-      console.log(`[EMAIL API] Config - Has RESEND_API_KEY: ${hasResendKey}, FROM: ${fromEmail}, To: ${body.assignees?.map((a:any)=>a.email).join(', ')} + issuer ${body.createdByEmail}`)
+      console.log(`[EMAIL API] Config - Provider: ${provider}, Gmail: ${hasGmail}, Resend: ${hasResendKey}, To: ${body.assignees?.map((a:any)=>a.email).join(', ')} + issuer ${body.createdByEmail}`)
 
       const result = await sendJobAssignmentEmail({
         jobId: body.jobId,
@@ -86,13 +87,20 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET() {
-  const hasKey = !!process.env.RESEND_API_KEY
-  const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
+  const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  const hasResend = !!process.env.RESEND_API_KEY
+  const provider = process.env.EMAIL_PROVIDER || (hasGmail ? 'gmail' : 'resend')
+  const fromEmail = provider === 'gmail' ? (process.env.GMAIL_USER || 'not set') : (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev')
+  const configured = provider === 'gmail' ? hasGmail : hasResend
   return NextResponse.json({
-    configured: hasKey,
+    configured,
+    provider,
     fromEmail,
     appUrl: process.env.NEXT_PUBLIC_APP_URL || 'not set',
-    warning: fromEmail.includes('onboarding@resend.dev') ? 'Using onboarding@resend.dev - Resend free tier only sends to your verified email. Add domain to send to all.' : null,
-    message: hasKey ? 'Email system ready ✅' : 'Missing RESEND_API_KEY - emails are mocked and not sent. Add key in Render env vars.'
+    hasGmailUser: !!process.env.GMAIL_USER,
+    hasGmailPass: !!process.env.GMAIL_APP_PASSWORD,
+    hasResendKey: hasResend,
+    warning: provider === 'resend' && fromEmail.includes('onboarding@resend.dev') ? 'Using onboarding@resend.dev - Resend free tier only sends to your verified email. Add domain to send to all.' : null,
+    message: configured ? `Email system ready via ${provider} ✅` : 'Missing email config - add GMAIL_USER + GMAIL_APP_PASSWORD with EMAIL_PROVIDER=gmail in Render env vars.'
   })
 }

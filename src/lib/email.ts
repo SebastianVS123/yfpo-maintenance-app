@@ -70,7 +70,8 @@ async function sendEmail(to: string, subject: string, html: string) {
     const transporter = getGmailTransporter()
     if (!transporter) throw new Error('Gmail not configured - missing GMAIL_USER or GMAIL_APP_PASSWORD')
     const from = process.env.GMAIL_USER!
-    const result = await transporter.sendMail({ from: `YFPO Maintenance <${from}>`, to, subject, html })
+    // Neutral display name - "YFPO" in From triggers corporate anti-spoof filters when sent from gmail.com
+    const result = await transporter.sendMail({ from: `Maintenance App <${from}>`, to, subject, html })
     return { provider: 'gmail', result }
   } else {
     if (!resend) throw new Error('Resend not configured - missing RESEND_API_KEY')
