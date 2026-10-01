@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer'
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
 
 // Gmail transporter - used when EMAIL_PROVIDER=gmail
+// NOTE: Render's network blocks SMTP (port 465) so Gmail hangs there - timeouts prevent infinite hang
 function getGmailTransporter() {
   const user = process.env.GMAIL_USER
   const pass = process.env.GMAIL_APP_PASSWORD
@@ -11,7 +12,52 @@ function getGmailTransporter() {
   return nodemailer.createTransport({
     service: 'gmail',
     auth: { user, pass },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   })
+}
+
+// Provider selection: explicit EMAIL_PROVIDER wins, else auto brevo > gmail > resend
+function getProvider(): 'brevo' | 'gmail' | 'resend' {
+  const explicit = (process.env.EMAIL_PROVIDER || '').toLowerCase()
+  if (explicit === 'brevo' || explicit === 'gmail' || explicit === 'resend') return explicit
+  if (process.env.BREVO_API_KEY) return 'brevo'
+  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) return 'gmail'
+  return 'resend'
+}
+
+export function hasAnyProvider() {
+  return !!(process.env.BREVO_API_KEY || (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) || process.env.RESEND_API_KEY)
+}
+
+// Brevo HTTP API - works everywhere (port 443), no DNS needed, just verify sender email via link
+async function sendViaBrevo(to: string, toName: string, subject: string, html: string) {
+  const apiKey = process.env.BREVO_API_KEY
+  if (!apiKey) throw new Error('Brevo not configured - missing BREVO_API_KEY')
+  const senderEmail = process.env.BREVO_SENDER || process.env.GMAIL_USER || 'yfpo.maintenance@gmail.com'
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 20000)
+  try {
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'api-key': apiKey },
+      body: JSON.stringify({
+        sender: { name: 'Maintenance App', email: senderEmail },
+        to: [{ email: to, name: toName || to }],
+        subject,
+        htmlContent: html,
+      }),
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`Brevo error ${res.status}: ${text.slice(0, 200)}`)
+    }
+    return await res.json()
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 interface OutstandingJob {
@@ -62,10 +108,15 @@ const formatDate = (d: any) => {
   return date.toLocaleString('en-ZA', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-// Unified send function - tries Gmail first, then Resend
-async function sendEmail(to: string, subject: string, html: string) {
-  const provider = process.env.EMAIL_PROVIDER || (process.env.GMAIL_USER ? 'gmail' : 'resend')
-  
+// Unified send function - Brevo (HTTP) > Gmail (SMTP) > Resend
+async function sendEmail(to: string, subject: string, html: string, toName?: string) {
+  const provider = getProvider()
+
+  if (provider === 'brevo') {
+    const result = await sendViaBrevo(to, toName || to, subject, html)
+    return { provider: 'brevo', result }
+  }
+
   if (provider === 'gmail') {
     const transporter = getGmailTransporter()
     if (!transporter) throw new Error('Gmail not configured - missing GMAIL_USER or GMAIL_APP_PASSWORD')
@@ -81,12 +132,22 @@ async function sendEmail(to: string, subject: string, html: string) {
   }
 }
 
+// Diagnostic: can this server reach Gmail SMTP?
+export async function diagGmailSmtp() {
+  const transporter = getGmailTransporter()
+  if (!transporter) return { ok: false, error: 'Missing GMAIL_USER or GMAIL_APP_PASSWORD' }
+  try {
+    await transporter.verify()
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+}
+
 export async function sendJobAssignmentEmail(data: JobEmailData) {
-  const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
-  const hasResend = !!process.env.RESEND_API_KEY
-  if (!hasGmail && !hasResend) {
+  if (!hasAnyProvider()) {
     console.log('[EMAIL MOCK] No provider configured. Would send to:', data.assignees.map(a => a.email), 'issuer', data.createdByEmail)
-    return { success: true, mocked: true, reason: 'No email provider configured - add GMAIL_USER + GMAIL_APP_PASSWORD or RESEND_API_KEY' }
+    return { success: true, mocked: true, reason: 'No email provider configured - add BREVO_API_KEY or GMAIL_USER + GMAIL_APP_PASSWORD or RESEND_API_KEY' }
   }
 
   const priorityConfig = priorityMap[data.priority] || { label: data.priority.toUpperCase(), color: '#fff', bg: '#6b7280', bgLight: '#f3f4f6', border: '#6b7280', emoji: '⚪' }
@@ -95,8 +156,8 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
     const color = deptColors[dept] || '#6b7280'
     return `<span style="display:inline-block; background:${color}; color:white; padding:4px 10px; border-radius:20px; font-size:11px; font-weight:bold; margin:2px;">${dept}</span>`
   }).join(' ')
-  const photosHtml = data.photos && data.photos.length > 0 
-    ? `<div style="margin:16px 0;"><p style="font-weight:bold; color:#374151; margin-bottom:8px;">📸 Issue Photos (${data.photos.length}):</p><div>${data.photos.map((url, i) => `<a href="${url}" style="color:${priorityConfig.border}; font-size:12px;">Photo ${i+1}</a>`).join(' | ')}</div></div>` 
+  const photosHtml = data.photos && data.photos.length > 0
+    ? `<div style="margin:16px 0;"><p style="font-weight:bold; color:#374151; margin-bottom:8px;">📸 Issue Photos (${data.photos.length}):</p><div>${data.photos.map((url, i) => `<a href="${url}" style="color:${priorityConfig.border}; font-size:12px;">Photo ${i+1}</a>`).join(' | ')}</div></div>`
     : ''
 
   const allResults: any[] = []
@@ -106,7 +167,7 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
   for (const assignee of data.assignees) {
     const outstanding = assignee.outstandingJobs || []
     const otherJobs = outstanding.filter(j => j.id !== data.jobId)
-    
+
     const outstandingHtml = otherJobs.length > 0 ? `
       <div style="background:#fffbeb; border:1px solid #fcd34d; border-left:4px solid #f59e0b; padding:16px; border-radius:0 8px 8px 0; margin:20px 0;">
         <h3 style="margin:0 0 10px 0; color:#92400e; font-size:13px; font-weight:800;">📋 YOUR OUTSTANDING JOBS (${otherJobs.length} other):</h3>
@@ -153,7 +214,7 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
     `
 
     try {
-      const result = await sendEmail(assignee.email, `${priorityConfig.emoji} [${priorityConfig.label}] Assigned: ${data.title} - ${data.location}`, assigneeHtml)
+      const result = await sendEmail(assignee.email, `${priorityConfig.emoji} [${priorityConfig.label}] Assigned: ${data.title} - ${data.location}`, assigneeHtml, assignee.name)
       allResults.push({ to: assignee.email, success: true, result })
     } catch (err: any) {
       allResults.push({ to: assignee.email, success: false, error: err.message })
@@ -190,7 +251,7 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
       </div>
     </div></body></html>
     `
-    const issuerResult = await sendEmail(data.createdByEmail, `✅ Issued: ${data.title} - ${data.location} [${priorityConfig.label}]`, issuerHtml)
+    const issuerResult = await sendEmail(data.createdByEmail, `✅ Issued: ${data.title} - ${data.location} [${priorityConfig.label}]`, issuerHtml, data.createdByName)
     allResults.push({ to: data.createdByEmail, type: 'issuer', success: true, result: issuerResult })
   } catch (err: any) {
     allResults.push({ to: data.createdByEmail, type: 'issuer', success: false, error: err.message })
@@ -201,13 +262,11 @@ export async function sendJobAssignmentEmail(data: JobEmailData) {
 }
 
 export async function sendJobCompletionEmail(data: any) {
-  const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
-  const hasResend = !!process.env.RESEND_API_KEY
-  if (!hasGmail && !hasResend) return { success: true, mocked: true }
-  
+  if (!hasAnyProvider()) return { success: true, mocked: true }
+
   const jobLink = `${data.appUrl}/jobs/${data.jobId}`
   const html = `<div style="font-family:sans-serif; max-width:600px; margin:0 auto; padding:20px;"><div style="background:white; border-radius:12px; padding:20px; border:1px solid #e4e4e7;"><h1 style="color:#16a34a;">✅ Job Completed: ${data.title}</h1><p>Location: ${data.location}</p><p>Completed by: ${data.completedBy}</p><p>Completed: ${formatDate(data.completedAt)}</p>${data.finalNotes ? `<p>Notes: ${data.finalNotes}</p>` : ''}<a href="${jobLink}" style="display:inline-block; background:black; color:white; padding:10px 20px; text-decoration:none; border-radius:8px;">View Job</a></div></div>`
-  
+
   try {
     const result = await sendEmail(data.createdByEmail, `✅ Completed: ${data.title}`, html)
     return { success: true, result }
@@ -215,17 +274,16 @@ export async function sendJobCompletionEmail(data: any) {
 }
 
 export async function sendOverdueEmail(data: any) {
-  const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
-  const hasResend = !!process.env.RESEND_API_KEY
-  if (!hasGmail && !hasResend) return { success: true, mocked: true }
-  
+  if (!hasAnyProvider()) return { success: true, mocked: true }
+
   const jobLink = `${data.appUrl}/jobs/${data.jobId}`
   const html = `<div style="font-family:sans-serif; max-width:600px; margin:0 auto; padding:20px;"><div style="background:white; border-radius:12px; border:2px solid #dc2626; overflow:hidden;"><div style="background:#dc2626; color:white; padding:16px; text-align:center;"><h1>🚨 OVERDUE: ${data.title}</h1></div><div style="padding:20px;"><p>Location: ${data.location}</p><p>Assigned: ${data.assignees.map((a:any)=>a.name).join(', ')}</p><a href="${jobLink}" style="display:inline-block; background:#dc2626; color:white; padding:12px 24px; text-decoration:none; border-radius:8px;">View Overdue Job</a></div></div></div>`
-  
+
   try {
-    const allRecipients = [...data.assignees.map((a:any)=>a.email), data.createdByEmail]
-    const unique = [...new Set(allRecipients)]
-    const results = await Promise.all(unique.map(email => sendEmail(email, `🚨 OVERDUE: ${data.title}`, html)))
+    const seen = new Set<string>()
+    const uniqueTargets = [...data.assignees.map((a: any) => ({ email: a.email, name: a.name })), { email: data.createdByEmail, name: data.createdByEmail }]
+      .filter(t => { if (seen.has(t.email)) return false; seen.add(t.email); return true })
+    const results = await Promise.all(uniqueTargets.map(t => sendEmail(t.email, `🚨 OVERDUE: ${data.title}`, html, t.name)))
     return { success: true, results }
   } catch (e) { return { success: false, error: e } }
 }

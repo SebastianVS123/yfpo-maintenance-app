@@ -170,9 +170,10 @@ export default function CreateJobPage() {
       router.push(`/jobs/${jobId}?created=true`)
 
       // Background: upload photos + send emails with outstanding jobs
+      // Photos and outstanding-lists run in PARALLEL, email waits max 12s for photos then sends regardless (keepalive survives redirect/tab close)
       const processInBackground = async () => {
-        let photoUrls: string[] = []
-        if (photos.length > 0) {
+        const uploadsDone: Promise<string[]> = (async () => {
+          if (photos.length === 0) return []
           const results = await Promise.allSettled(
             photos.map(async (photo) => {
               try {
@@ -182,25 +183,35 @@ export default function CreateJobPage() {
               } catch { return null }
             })
           )
-          photoUrls = results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean) as string[]
-        }
+          return results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean) as string[]
+        })()
 
-        // Fetch outstanding jobs for each assignee
-        const assigneesWithOutstanding = await Promise.all(
-          personnelList.filter(p => form.assignedPersonnel.includes(p.id)).map(async (p) => {
-            const outstanding = await fetchOutstandingForPersonnel(p.id)
-            // Add current job to outstanding list for context
-            const allOutstanding = [...outstanding, { id: jobId, title: jobData.title, location: jobData.location, priority: jobData.priority, status: 'open', due_date: jobData.due_date }]
-            return { name: p.full_name, email: p.email, outstandingJobs: allOutstanding }
-          })
-        )
+        // Fetch outstanding jobs for each assignee (parallel with uploads)
+        const outstandingDone = (async () => {
+          const assigneesWithOutstanding = await Promise.all(
+            personnelList.filter(p => form.assignedPersonnel.includes(p.id)).map(async (p) => {
+              const outstanding = await fetchOutstandingForPersonnel(p.id)
+              // Add current job to outstanding list for context
+              const allOutstanding = [...outstanding, { id: jobId, title: jobData.title, location: jobData.location, priority: jobData.priority, status: 'open', due_date: jobData.due_date }]
+              return { name: p.full_name, email: p.email, outstandingJobs: allOutstanding }
+            })
+          )
+          const issuerOutstanding = await fetchOutstandingForIssuer(user.uid)
+          return { assigneesWithOutstanding, issuerOutstanding }
+        })()
 
-        const issuerOutstanding = await fetchOutstandingForIssuer(user.uid)
+        const { assigneesWithOutstanding, issuerOutstanding } = await outstandingDone
+        // Wait for photos but max 12s - email must not be held hostage by slow uploads
+        const photoUrls = await Promise.race([
+          uploadsDone,
+          new Promise<string[]>(resolve => setTimeout(() => resolve([]), 12000))
+        ])
 
         try {
-          await fetch('/api/send-email', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
             body: JSON.stringify({ 
               type: 'assignment', 
               jobId, 

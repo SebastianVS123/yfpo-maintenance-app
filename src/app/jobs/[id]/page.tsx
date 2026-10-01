@@ -135,6 +135,7 @@ export default function JobDetailPage() {
       const res = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
         body: JSON.stringify({
           type: 'assignment',
           jobId: job.id,

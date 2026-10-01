@@ -1,5 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { sendJobAssignmentEmail, sendJobCompletionEmail, sendOverdueEmail } from '@/lib/email'
+import { sendJobAssignmentEmail, sendJobCompletionEmail, sendOverdueEmail, diagGmailSmtp } from '@/lib/email'
+
+function getStatus() {
+  const hasBrevo = !!process.env.BREVO_API_KEY
+  const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  const hasResend = !!process.env.RESEND_API_KEY
+  const explicit = (process.env.EMAIL_PROVIDER || '').toLowerCase()
+  const provider = explicit === 'brevo' || explicit === 'gmail' || explicit === 'resend'
+    ? explicit
+    : hasBrevo ? 'brevo' : hasGmail ? 'gmail' : 'resend'
+  const fromEmail = provider === 'brevo'
+    ? (process.env.BREVO_SENDER || process.env.GMAIL_USER || 'yfpo.maintenance@gmail.com')
+    : provider === 'gmail' ? (process.env.GMAIL_USER || 'not set') : (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev')
+  const configured = provider === 'brevo' ? hasBrevo : provider === 'gmail' ? hasGmail : hasResend
+  return { provider, fromEmail, configured, hasBrevo, hasGmailUser: !!process.env.GMAIL_USER, hasGmailPass: !!process.env.GMAIL_APP_PASSWORD, hasResendKey: hasResend }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,11 +24,8 @@ export async function POST(request: NextRequest) {
     console.log(`[EMAIL API] Received ${type} request for job ${body.jobId}`)
 
     if (type === 'assignment') {
-      // Check config
-      const provider = process.env.EMAIL_PROVIDER || (process.env.GMAIL_USER ? 'gmail' : 'resend')
-      const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
-      const hasResendKey = !!process.env.RESEND_API_KEY
-      console.log(`[EMAIL API] Config - Provider: ${provider}, Gmail: ${hasGmail}, Resend: ${hasResendKey}, To: ${body.assignees?.map((a:any)=>a.email).join(', ')} + issuer ${body.createdByEmail}`)
+      const s = getStatus()
+      console.log(`[EMAIL API] Config - Provider: ${s.provider}, Brevo: ${s.hasBrevo}, Gmail: ${s.hasGmailUser && s.hasGmailPass}, Resend: ${s.hasResendKey}, To: ${body.assignees?.map((a:any)=>a.email).join(', ')} + issuer ${body.createdByEmail}`)
 
       const result = await sendJobAssignmentEmail({
         jobId: body.jobId,
@@ -68,14 +80,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(result)
     }
 
+    if (type === 'diag-smtp') {
+      // Test if this server can reach Gmail SMTP (Render blocks port 465)
+      const result = await diagGmailSmtp()
+      return NextResponse.json({ smtp: result.ok ? 'ok' : 'blocked', ...result })
+    }
+
     if (type === 'test') {
-      // Test email endpoint
-      const hasKey = !!process.env.RESEND_API_KEY
-      return NextResponse.json({ 
-        hasResendKey: hasKey, 
-        fromEmail: process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev',
+      const s = getStatus()
+      return NextResponse.json({
+        ...s,
         appUrl: process.env.NEXT_PUBLIC_APP_URL,
-        message: hasKey ? 'Resend configured' : 'Missing RESEND_API_KEY - emails mocked'
+        message: s.configured ? `Email ready via ${s.provider}` : 'Missing email config - add BREVO_API_KEY (recommended) or GMAIL_USER + GMAIL_APP_PASSWORD'
       })
     }
 
@@ -87,20 +103,17 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET() {
-  const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
-  const hasResend = !!process.env.RESEND_API_KEY
-  const provider = process.env.EMAIL_PROVIDER || (hasGmail ? 'gmail' : 'resend')
-  const fromEmail = provider === 'gmail' ? (process.env.GMAIL_USER || 'not set') : (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev')
-  const configured = provider === 'gmail' ? hasGmail : hasResend
+  const s = getStatus()
   return NextResponse.json({
-    configured,
-    provider,
-    fromEmail,
+    configured: s.configured,
+    provider: s.provider,
+    fromEmail: s.fromEmail,
     appUrl: process.env.NEXT_PUBLIC_APP_URL || 'not set',
-    hasGmailUser: !!process.env.GMAIL_USER,
-    hasGmailPass: !!process.env.GMAIL_APP_PASSWORD,
-    hasResendKey: hasResend,
-    warning: provider === 'resend' && fromEmail.includes('onboarding@resend.dev') ? 'Using onboarding@resend.dev - Resend free tier only sends to your verified email. Add domain to send to all.' : null,
-    message: configured ? `Email system ready via ${provider} ✅` : 'Missing email config - add GMAIL_USER + GMAIL_APP_PASSWORD with EMAIL_PROVIDER=gmail in Render env vars.'
+    hasBrevo: s.hasBrevo,
+    hasGmailUser: s.hasGmailUser,
+    hasGmailPass: s.hasGmailPass,
+    hasResendKey: s.hasResendKey,
+    warning: s.provider === 'resend' && s.fromEmail.includes('onboarding@resend.dev') ? 'Using onboarding@resend.dev - Resend free tier only sends to your verified email. Add domain to send to all.' : null,
+    message: s.configured ? `Email system ready via ${s.provider} ✅` : 'Missing email config - add BREVO_API_KEY (recommended, works on Render) in Render env vars.'
   })
 }
